@@ -4,17 +4,25 @@
 (define (mangle-name sym next-id)
   (string->symbol (string-append (symbol->string sym) "_" (number->string next-id))))
 
+;; Returns a new hash table representing a new environment with 'var' added to it
+;; by mangling their names to append 'next-id'.
 (define (symtab-with-vars symtab vars next-id)
   (define (add-var var table)
     (let ([name (car var)])
       (hash-set table name (mangle-name name next-id))))
   (foldl add-var symtab vars))
 
+;; Returns the symtab value indexed by 'name', or 'name' itself if 'name' is not a
+;; key in the table.
 (define (render-name name symtab)
   (hash-ref symtab name name))
 
+;; Returns an expression that is syntactically identical to the input expression, but
+;; with all variables given unique names.
 (define (gen-unique-names expr)
-  
+
+  ;; Recursive helper procedure threads 'next-id' and 'symtab' through the recursive
+  ;; process.
   (define (gen-unique-names expr next-id symtab)
     (define (builder-proc elem lst)
       (cons
@@ -27,7 +35,7 @@
                     (let ([vars (first args)]
                           [subexpr (second args)])
                       (gen-unique-names (list proc vars subexpr)
-                                        (+ 1 next-id)
+                                        (add1 next-id)
                                         (symtab-with-vars symtab vars next-id)))
                     (gen-unique-names elem next-id symtab))])
              (else (error "unrecognized token:" elem)))
@@ -38,6 +46,3 @@
 
 ;; Exports
 (provide gen-unique-names)
-
-;; Tests
-(gen-unique-names '(let ((x 10) (y 6)) (+ (let ((x 1) (y 4)) y) x)))
