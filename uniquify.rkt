@@ -19,11 +19,11 @@
 
 ;; Returns an expression that is syntactically identical to the input expression, but
 ;; with all variables given unique names.
-(define (gen-unique-names expr)
-
+(define (uniquify expr)
+  
   ;; Recursive helper procedure threads 'next-id' and 'symtab' through the recursive
   ;; process.
-  (define (gen-unique-names expr next-id symtab)
+  (define (uniquify expr next-id symtab)
     (define (builder-proc elem lst)
       (cons
        (cond ([integer? elem] elem)
@@ -34,15 +34,15 @@
                 (if (eq? proc 'let)
                     (let ([vars (first args)]
                           [subexpr (second args)])
-                      (gen-unique-names (list proc vars subexpr)
-                                        (add1 next-id)
-                                        (symtab-with-vars symtab vars next-id)))
-                    (gen-unique-names elem next-id symtab))])
+                      (uniquify (list proc vars subexpr)
+                                (add1 next-id)
+                                (symtab-with-vars symtab vars next-id)))
+                    (uniquify elem next-id symtab))])
              (else (error "unrecognized token:" elem)))
        lst))
     (foldr builder-proc empty expr))
   
-  (first (gen-unique-names (list expr) 0 #hash())))
+  (first (uniquify (list expr) 0 #hash())))
 
 ;; Exports
-(provide gen-unique-names)
+(provide uniquify)
