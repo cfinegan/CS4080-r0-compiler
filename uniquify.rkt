@@ -17,6 +17,8 @@
 (define (render-name name symtab)
   (hash-ref symtab name name))
 
+(define built-in-procs '(+ - * /))
+
 ;; Returns an expression that is syntactically identical to the input expression, but
 ;; with all variables given unique names.
 (define (uniquify expr)
@@ -31,12 +33,12 @@
              ([list? elem]
               [let ([proc (first elem)]
                     [args (rest elem)])
-                (if (eq? proc 'let)
-                    (let ([vars (first args)]
+                (if [eq? proc 'let]
+                    [let ([vars (first args)]
                           [subexpr (second args)])
                       (uniquify (list proc vars subexpr)
                                 (add1 next-id)
-                                (symtab-with-vars symtab vars next-id)))
+                                (symtab-with-vars symtab vars next-id))]
                     (uniquify elem next-id symtab))])
              (else (error "unrecognized token:" elem)))
        lst))

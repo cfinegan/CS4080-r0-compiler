@@ -11,4 +11,7 @@
  (check-equal? (uniquify '((let ((x 0) (y 2)) (+ x y)) (+ e f)))
                '((let ((x_0 0) (y_0 2)) (+ x_0 y_0)) (+ e f)))
 
+ (check-equal? (uniquify '(let ((x 2)) (let ((y (+ x 3))) (+ x y))))
+               '(let ((x_0 2)) (let ((y_1 (+ x_0 3))) (+ x_0 y_1))))
+
  )
