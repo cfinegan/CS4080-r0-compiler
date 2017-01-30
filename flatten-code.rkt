@@ -1,64 +1,114 @@
 #lang racket
 
-;(struct stmt (code vars))
-;
-;(define (mov-stmt src dest)
-;  (stmt ('mov (list src dest))))
-;
-;(define (add-stmt src dest)
-;  (stmt ('add (list src dest))))
-;
-;(define (ret-stmt)
-;  (stmt ('ret empty)))
-;
-;(define (neg-stmt var)
-;  (stmt ('neg (list var))))
-;
-;(define (read-stmt dest)
-;  (stmt ('read (list dest))))
+;; dirty pig-disgusting mutable state
+(define next-tmp-name
+  (let ([next-id! 0])
+    (λ ()
+      (let ([next-name (string->symbol (string-append "tmp." (number->string next-id!)))])
+        (begin (set! next-id! (add1 next-id!))
+               next-name)))))
 
-(define (next-tmp-name next-id)
-  (string->symbol (string-append "tmp." (number->string next-id))))
+;; creates a new return instruction
+(define (return-inst arg)
+  (list 'return arg))
 
-;(define (flatten-code expr)
-;  (let ([codes! empty])
-;
-;    (define (append-stmt stmt)
-;      (set! codes! (cons stmt codes!)))
-;    
-;    (define (append-integer n next-name)
-;      (set! codes! (cons (mov-stmt n next-name) codes!)))
-;
-;    (define (append-expr expr next-id)
-;      (let ([next-name (next-tmp-name next-id)])
-;        (cond [(integer? expr) (append-integer expr next-name)]
-;              [(list? expr)
-;               (let ([proc (first expr)]
-;                     [args (rest expr)])
-;                 (cond [(eq? proc 'let)
-;                        (let ([vars (first args)]
-;                              [subexpr (second args)])
-;                          (begin
-;                            (for-each (λ (var) (append-stmt (mov-stmt (cdr var) (car var)))) vars)
-;                            (append-stmt]
+;; creates a new assign instruction
+(define (assign-inst src dest)
+  (list 'assign src dest))
 
-(define (mov-stmt src dest)
-  (list 'mov src dest))
+;; creates a new program with specified vars and instructions
+(define (program vars insts)
+  (cond [(not (list? vars))
+         (error "invalid argument (expected list) 'vars':" vars)]
+        [(not (list? insts))
+         (error "invalid argument (expected list) 'insts':" insts)]
+        [else
+         (list 'program vars insts)]))
 
-(define (add-stmt src dest)
-  (list 'add src dest))
+;; gets the 'var' field of a program
+(define (program-vars prog)
+  (second prog))
 
-(define (ret-stmt)
-  (list 'ret))
+;; gets the 'insts' field of a program
+(define (program-insts prog)
+  (third prog))
 
-(define (neg-stmt var)
-  (list 'neg var))
+;; flatten an integer literal into a program that returns arg
+(define (flatten-int arg)
+  (program empty (list (return-inst arg))))
 
-(define (read-stmt dest)
-  (list 'read dest))
+;; flatten a variable name into a program that declares that name and returns it.
+(define (flatten-var arg)
+  (program (list arg) (list (return-inst arg))))
 
-(struct program (assign-stmts vars insts))
+;; flatten a read expression into a program that assigns 'read to a temp variable and returns it
+(define (flatten-read)
+  (let ([dest-name (next-tmp-name)])
+    (program (list dest-name) (list (assign-inst 'read dest-name)
+                                    (return-inst dest-name)))))
 
+;; flatten a negation expression into a program that negates arg and returns it
+(define (flatten-neg arg)
+  (match (flatten-code arg)
+    [(list 'program (list vars ...) (list stmts ... (list 'return ans)))
+     (let ([dest-name (if (symbol? ans) ans (next-tmp-name))])
+       (program (set-union (list dest-name) vars)
+                (append stmts (list (assign-inst (list '- ans) dest-name)
+                                    (return-inst dest-name)))))]))
+
+;; flatten an a arithmetic expression into a program that applies proc-name to L and R, stores
+;; the result in a variable, and returns it.
+(define (flatten-arith proc-name L R)
+  (match (flatten-code L)
+    [(list 'program (list L-vars ...) (list L-stmts ... (list 'return L-ans)))
+     (match (flatten-code R)
+       [(list 'program (list R-vars ...) (list R-stmts ... (list 'return R-ans)))
+        (let ([dest-name (next-tmp-name)])
+          (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
+                   (append L-stmts R-stmts (list (assign-inst (list proc-name L-ans R-ans) dest-name)
+                                                 (return-inst dest-name)))))])]))
+
+;; flatten a let expression by breaking the var expressions into programs and appending them
+;; to subexpr
+(define (flatten-let vars subexpr)
+
+  ;; Converts the (name expr) pair into a program which declares and assigns to var name, but
+  ;; does *not* return it
+  (define (var->prog var)
+    (let ([var-name (first var)]
+          [var-expr (second var)])
+      (match (flatten-code var-expr)
+        [(list 'program (list vars ...) (list stmts ... (list 'return ans)))
+         (program vars (append stmts (list (assign-inst ans var-name))))])))
+  
+  (let ([var-prog (foldl append empty (map var->prog vars))]
+        [subexpr-prog (flatten-code subexpr)])
+    (program (append (program-vars var-prog) (program-vars subexpr-prog))
+             (append (program-insts var-prog) (program-insts subexpr-prog)))))
+
+;; flatten an expression by branching on type and calling appropriate helper procedure
 (define (flatten-code expr)
-  (let ([prog! (program empty empty empty)])
-    #f))
+  (display expr) (newline)
+  (cond [(integer? expr) (flatten-int expr)]
+        [(symbol? expr) (flatten-var expr)]
+        [(list? expr)
+         (let ([proc (first expr)]
+               [args (rest expr)])
+           (cond [(eq? proc 'read)
+                  (flatten-read)]
+                 [(eq? proc 'let)
+                  (flatten-let (first args) (second args))]
+                 [(and (eq? proc '-) (= (length args) 1))
+                  (flatten-neg (first args))]
+                 [(set-member? '(+ - * /) proc)
+                  (flatten-arith proc (first args) (second args))]
+                 [else (error "unrecognized procedure name:" proc)]))]
+        [else (error "unrecognized expression:" expr)]))
+
+;; Export
+(provide flatten-code)
+
+;; Test
+(require "uniquify.rkt")
+(flatten-code '(+ 1 (- 3)))
+(flatten-code (uniquify '(let ((x 3) (y 2)) (+ x y))))
