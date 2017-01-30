@@ -88,7 +88,6 @@
 
 ;; flatten an expression by branching on type and calling appropriate helper procedure
 (define (flatten-code expr)
-  (display expr) (newline)
   (cond [(integer? expr) (flatten-int expr)]
         [(symbol? expr) (flatten-var expr)]
         [(list? expr)
