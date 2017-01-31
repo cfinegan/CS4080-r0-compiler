@@ -111,3 +111,4 @@
 (require "uniquify.rkt")
 (flatten-code '(+ 1 (- 3)))
 (flatten-code (uniquify '(let ((x 3) (y 2)) (+ x y))))
+(flatten-code (uniquify '(let ((x 1)) (/ (read) x))))
