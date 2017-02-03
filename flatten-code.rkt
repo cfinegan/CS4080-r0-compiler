@@ -1,5 +1,6 @@
 #lang racket
 
+
 ;; dirty pig-disgusting mutable state
 (define next-tmp-name
   (let ([next-id! 0])
@@ -111,3 +112,4 @@
 (flatten-code '(+ 1 (- 3)))
 (flatten-code '(let ((x 3) (y 2)) (+ x y)))
 (flatten-code '(let ((x 1)) (/ (read) x)))
+(flatten-code '(+ 2 3))

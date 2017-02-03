@@ -1,35 +1,19 @@
 #lang racket
 
-(define (integer->asm int)
-  (string-append "$" (number->string int)))
+(struct int (val) #:transparent)
 
-(define expr? list?)
+(struct var (name) #:transparent)
 
-(define (inst->asm inst)
+(struct mov-inst (src dest) #:transparent)
 
-  (define (expr->asm expr)
-    #t)
-  
-  (match inst
-    [(list 'assign src dest)
-     #f]))
+(struct ret-inst (var) #:transparent)
 
-(define (select-inst program)
+(struct add-inst (src dest) #:transparent)
 
-  (define (inst->x86* inst)
-    (match inst
-      [(list 'assign src dest)
-       (cond [(eq? src 'read) (error "not implemented!")]
-             [(symbol? src) src]
-             [(integer? src) (integer->asm src)]
-             [(list? src)
-              (match src
-                [(list '- arg)
-             
-  (match program
-    [(list 'program (list vars ...) (list insts ...))
-     (let ([x86-insts
-            (map
-             (λ (inst)
-               (match inst
-                 [(
+(struct sub-inst (src dest) #:transparent)
+
+(struct neg-inst (var) #:transparent)
+
+(struct mul-inst (src dest) #:transparent)
+
+(struct div-inst (src dest) #:transparent)
