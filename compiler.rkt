@@ -50,22 +50,40 @@
 ;; Creates a new assignment statement.
 (struct assign-stmt (src dest) #:transparent)
 
+(struct add-expr (arg1 arg2) #:transparent)
+
+(struct sub-expr (arg1 arg2) #:transparent)
+
+(struct neg-expr (arg) #:transparent)
+
+(struct mul-expr (arg1 arg2) #:transparent)
+
+(struct div-expr (arg1 arg2) #:transparent)
+
 ;; Creates a new program structure.
 (struct program (vars stmts) #:transparent)
 
+(define (list->expr lst)
+  (match lst
+    [(list '+ arg1 arg2) (add-expr arg1 arg2)]
+    [(list '- arg1 arg2) (sub-expr arg1 arg2)]
+    [(list '- arg) (neg-expr arg)]
+    [(list '* arg1 arg2) (mul-expr arg1 arg2)]
+    [(list '/ arg1 arg2) (div-expr arg1 arg2)]))
 
-;;; flatten-code
-;;; Flattens an expression into a series of statements which only reference integers
-;;; or variable names.
-(define (flatten-code expr)
 
-  ;; Always returns the 'next' temporary name. Encapsulates mutable state.
-  (define next-tmp-name
+;; Always returns the 'next' temporary name. Encapsulates mutable state.
+(define next-tmp-name
   (let ([next-id! 0])
     (λ ()
       (let ([next-name (string->symbol (string-append "tmp." (number->string next-id!)))])
         (begin (set! next-id! (add1 next-id!))
                next-name)))))
+
+;;; flatten-code
+;;; Flattens an expression into a series of statements which only reference integers
+;;; or variable names.
+(define (flatten-code expr)
 
   ;; Flattens an integer literal into a program that returns arg.
   (define (flatten-int arg)
@@ -85,9 +103,9 @@
   (define (flatten-neg arg)
     (match (flatten-code arg)
       [(program (list vars ...) (list stmts ... (return-stmt ans)))
-       (let ([dest-name (if (symbol? ans) ans (next-tmp-name))])
+       (let ([dest-name (next-tmp-name)])
          (program (set-union (list dest-name) vars)
-                  (append stmts (list (assign-stmt (list '- ans) dest-name)
+                  (append stmts (list (assign-stmt (neg-expr ans) dest-name)
                                       (return-stmt dest-name)))))]))
 
   ;; Flattens an arithmetic expression into a program that applies proc-naem to L and R, stores
@@ -99,7 +117,7 @@
          [(program (list R-vars ...) (list R-stmts ... (return-stmt R-ans)))
           (let ([dest-name (next-tmp-name)])
             (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
-                     (append L-stmts R-stmts (list (assign-stmt (list proc-name L-ans R-ans) dest-name)
+                     (append L-stmts R-stmts (list (assign-stmt (list->expr (list proc-name L-ans R-ans)) dest-name)
                                                    (return-stmt dest-name)))))])]))
 
   ;; Flattens a let expression by breaking the var expressions into programs and appending them to subexpr.
@@ -142,16 +160,50 @@
                  [else (error "unrecognized procedure name:" proc)]))]
         [else (error "unrecognized expression:" expr)]))
 
+
+(struct int (val) #:transparent)
+
+(struct var (name) #:transparent)
+
+(struct mov-inst (src dest) #:transparent)
+
+(struct ret-inst (var) #:transparent)
+
+(struct add-inst (src dest) #:transparent)
+
+(struct sub-inst (src dest) #:transparent)
+
+(struct neg-inst (var) #:transparent)
+
+(struct mul-inst (src dest) #:transparent)
+
+(struct div-inst (src dest) #:transparent)
+
+
+(define (select-inst prog)
+
+  (define (assign->insts stmt)
+    (match stmt
+      [(assign-stmt src-expr (? symbol? dest))
+       #f]))
+
+  #f)
+
+
 (define u uniquify)
 (display "uniquify") (newline)
 (u '(- 5))
 (u '(+ x 3))
 (u '(- 4 y))
 (u '(let ([x 3] [y 4]) (+ x y)))
+(u '(+ 3 (read)))
 
 (define f flatten-code)
 (display "flatten") (newline)
 (f '(- 5))
-(f '(+ 2 3))
+(f '(+ 2 (- 3)))
 (f '(* 4 5))
-(f '(let ([x 4] [y 0]) (/ x y)))
+(f '(+ 3 (read)))
+(f (u '(+ 2 (- 3 (/ 4 (- 5))))))
+(f (u '(let ([x 4] [y 0]) (/ x y))))
+(f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
