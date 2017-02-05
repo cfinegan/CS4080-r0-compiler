@@ -167,6 +167,9 @@
 
 (struct var (name) #:transparent)
 
+(struct reg (name) #:transparent)
+
+
 (struct mov-inst (src dest) #:transparent)
 
 (struct ret-inst (var) #:transparent)
@@ -181,14 +184,101 @@
 
 (struct div-inst (src dest) #:transparent)
 
+(struct call-inst (func) #:transparent)
 
-(define (select-inst prog)
 
-  (define (assign->insts stmt)
+(struct xprogram (vars insts) #:transparent)
+
+
+;;; select-insts
+(define (select-insts prog)
+  
+  (define (arg->val arg)
+    (cond [(integer? arg) (int arg)]
+          [(symbol? arg) (var arg)]
+          [else (error "invalid arg:" arg)]))
+  
+  (define (stmt->insts stmt)
     (match stmt
       [(assign-stmt src-expr (? symbol? dest))
-       #f]))
+       (match src-expr
+         [(add-expr arg1 arg2)
+          (list (mov-inst (arg->val arg1) (var dest))
+                (add-inst (arg->val arg2) (var dest)))]
+         [(sub-expr arg1 arg2)
+          (list (mov-inst (arg->val arg1) (var dest))
+                (sub-inst (arg->val arg2) (var dest)))]
+         [(mul-expr arg1 arg2)
+          (list (mov-inst (arg->val arg1) (var dest))
+                (mul-inst (arg->val arg2) (var dest)))]
+         [(div-expr arg1 arg2)
+          (list (mov-inst (arg->val arg1) (var dest))
+                (div-inst (arg->val arg2) (var dest)))]
+         [(neg-expr arg)
+          (list (mov-inst (arg->val arg) (var dest))
+                (neg-inst (var dest)))]
+         ['read
+          (list (call-inst 'read_int)
+                (mov-inst (reg 'rax) (var dest)))]
+         [(? symbol? arg)
+          (list (mov-inst (var arg) (var dest)))]
+         [(? integer? arg)
+          (list (mov-inst (int arg) (var dest)))])]
+      [(return-stmt src-val)
+       (list (ret-inst (arg->val src-val)))]))
+  
+  (xprogram (program-vars prog) (foldr append empty (map stmt->insts (program-stmts prog)))))
 
+
+
+(define ptr-size 8)
+
+(struct deref (reg amount) #:transparent)
+
+(struct xxprogram (stack-size insts) #:transparent)
+
+;;; assign-homes
+(define (assign-homes xprog)
+  
+  (define var-count (length (xprogram-vars xprog)))
+  (define stack-size (* ptr-size (if (even? var-count) var-count (add1 var-count))))
+  
+  (define var-homes
+    (let map-homes ([vars (xprogram-vars xprog)] [index 0] [homes #hash()])
+      (if (null? vars)
+          homes
+          (map-homes (rest vars) (add1 index) (hash-set homes (first vars) (- (* index ptr-size)))))))
+
+  (define (var->deref arg)
+    (if (var? arg)
+        (deref 'rbp (hash-ref var-homes (var-name arg)))
+        arg))
+
+  (define (apply-deref inst)
+    (match inst
+      [(mov-inst src dest)
+       (mov-inst (var->deref src) (var->deref dest))]
+      [(add-inst src dest)
+       (add-inst (var->deref src) (var->deref dest))]
+      [(sub-inst src dest)
+       (sub-inst (var->deref src) (var->deref dest))]
+      [(mul-inst src dest)
+       (mul-inst (var->deref src) (var->deref dest))]
+      [(div-inst src dest)
+       (div-inst (var->deref src) (var->deref dest))]
+      [(neg-inst var)
+       (neg-inst (var->deref var))]
+      [(ret-inst var)
+       (ret-inst (var->deref var))]
+      [(call-inst var)
+       (call-inst var)]))
+
+  (xxprogram stack-size (map apply-deref (xprogram-insts xprog))))
+
+
+
+;;; patch-insts
+(define (patch-insts xxprog)
   #f)
 
 
@@ -202,9 +292,22 @@
 
 (define f flatten-code)
 (display "flatten") (newline)
+(f 5)
 (f '(- 5))
 (f '(+ 2 3))
 (f '(* 4 5))
 (f '(+ 3 (read)))
 (f (u '(+ 2 (- 3 (/ 4 (- 5))))))
 (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
+
+(define s select-insts)
+(display "select-insts") (newline)
+(s (f (u 5)))
+(s (f (u '(+ 4 (read)))))
+(s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))
+
+
+(define a assign-homes)
+(display "assign-homes") (newline)
+(a (s (f (u '(+ 4 (read))))))
+(a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
