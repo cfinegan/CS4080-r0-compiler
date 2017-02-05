@@ -73,6 +73,8 @@
 
 
 ;; Always returns the 'next' temporary name. Encapsulates mutable state.
+;; Defined outside of flatten-code closure so that recursive calls to flatten-code
+;; don't reset the tmp-name count.
 (define next-tmp-name
   (let ([next-id! 0])
     (λ ()
@@ -201,9 +203,8 @@
 (define f flatten-code)
 (display "flatten") (newline)
 (f '(- 5))
-(f '(+ 2 (- 3)))
+(f '(+ 2 3))
 (f '(* 4 5))
 (f '(+ 3 (read)))
 (f (u '(+ 2 (- 3 (/ 4 (- 5))))))
-(f (u '(let ([x 4] [y 0]) (/ x y))))
 (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
