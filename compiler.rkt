@@ -51,26 +51,20 @@
 ;; Creates a new assignment statement.
 (struct assign-stmt (src dest) #:transparent)
 
-(struct add-expr (arg1 arg2) #:transparent)
-
-(struct sub-expr (arg1 arg2) #:transparent)
-
-(struct neg-expr (arg) #:transparent)
-
-(struct mul-expr (arg1 arg2) #:transparent)
-
-(struct div-expr (arg1 arg2) #:transparent)
-
 ;; Creates a new program structure.
 (struct program (vars stmts) #:transparent)
 
+(struct unary-expr (op arg) #:transparent)
+
+(struct binary-expr (op src dest) #:transparent)
+
 (define (list->expr lst)
   (match lst
-    [(list '+ arg1 arg2) (add-expr arg1 arg2)]
-    [(list '- arg1 arg2) (sub-expr arg1 arg2)]
-    [(list '- arg) (neg-expr arg)]
-    [(list '* arg1 arg2) (mul-expr arg1 arg2)]
-    [(list '/ arg1 arg2) (div-expr arg1 arg2)]))
+    [(list '- arg) (unary-expr 'neg arg)]
+    [(list '+ arg1 arg2) (binary-expr 'add arg1 arg2)]
+    [(list '- arg1 arg2) (binary-expr 'sub arg2 arg2)]
+    [(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
+    [(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]))
 
 
 ;;;
@@ -110,7 +104,7 @@
         [(program (list vars ...) (list stmts ... (return-stmt ans)))
          (let ([dest-name (next-tmp-name)])
            (program (set-union (list dest-name) vars)
-                    (append stmts (list (assign-stmt (neg-expr ans) dest-name)
+                    (append stmts (list (assign-stmt (unary-expr 'neg ans) dest-name)
                                         (return-stmt dest-name)))))]))
     
     ;; Flattens an arithmetic expression into a program that applies proc-naem to L and R, stores
@@ -173,27 +167,14 @@
 
 (struct reg (name) #:transparent)
 
+(struct unary-inst (op arg) #:transparent)
 
-(struct mov-inst (src dest) #:transparent)
-
-(struct ret-inst (var) #:transparent)
-
-(struct add-inst (src dest) #:transparent)
-
-(struct sub-inst (src dest) #:transparent)
-
-(struct neg-inst (var) #:transparent)
-
-(struct mul-inst (src dest) #:transparent)
-
-(struct div-inst (src dest) #:transparent)
-
-(struct call-inst (func) #:transparent)
+(struct binary-inst (op src dest) #:transparent)
 
 
 (struct xprogram (vars insts) #:transparent)
 
-
+;;;
 ;;; select-insts
 (define (select-insts prog)
   
@@ -201,37 +182,28 @@
     (cond [(integer? arg) (int arg)]
           [(symbol? arg) (var arg)]
           [else (error "invalid arg:" arg)]))
-  
+
   (define (stmt->insts stmt)
     (match stmt
       [(assign-stmt src-expr (? symbol? dest))
        (match src-expr
-         [(add-expr arg1 arg2)
-          (list (mov-inst (arg->val arg1) (var dest))
-                (add-inst (arg->val arg2) (var dest)))]
-         [(sub-expr arg1 arg2)
-          (list (mov-inst (arg->val arg1) (var dest))
-                (sub-inst (arg->val arg2) (var dest)))]
-         [(mul-expr arg1 arg2)
-          (list (mov-inst (arg->val arg1) (var dest))
-                (mul-inst (arg->val arg2) (var dest)))]
-         [(div-expr arg1 arg2)
-          (list (mov-inst (arg->val arg1) (var dest))
-                (div-inst (arg->val arg2) (var dest)))]
-         [(neg-expr arg)
-          (list (mov-inst (arg->val arg) (var dest))
-                (neg-inst (var dest)))]
+         [(unary-expr op arg)
+          (list (binary-inst 'mov (arg->val arg) (var dest))
+                (unary-inst op (var dest)))]
+         [(binary-expr op arg1 arg2)
+          (list (binary-inst 'mov (arg->val arg1) (var dest))
+                (binary-inst op (arg->val arg2) (var dest)))]
          ['read
-          (list (call-inst 'read_int)
-                (mov-inst (reg 'rax) (var dest)))]
+          (list (unary-inst 'call "read_int")
+                (binary-inst 'mov (reg 'rax) (var dest)))]
          [(? symbol? arg)
-          (list (mov-inst (var arg) (var dest)))]
+          (binary-inst 'mov (var arg) (var dest))]
          [(? integer? arg)
-          (list (mov-inst (int arg) (var dest)))])]
+          (binary-inst 'mov (int arg) (var dest))])]
       [(return-stmt src-val)
-       (list (ret-inst (arg->val src-val)))]))
+       (unary-inst 'ret (arg->val src-val))]))
   
-  (xprogram (program-vars prog) (foldr append empty (map stmt->insts (program-stmts prog)))))
+  (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog)))))
 
 
 
@@ -241,6 +213,7 @@
 
 (struct xxprogram (stack-size insts) #:transparent)
 
+;;;
 ;;; assign-homes
 (define (assign-homes xprog)
   
@@ -257,30 +230,16 @@
     (if (var? arg)
         (deref 'rbp (hash-ref var-homes (var-name arg)))
         arg))
-  
+
   (define (apply-deref inst)
     (match inst
-      [(mov-inst src dest)
-       (mov-inst (var->deref src) (var->deref dest))]
-      [(add-inst src dest)
-       (add-inst (var->deref src) (var->deref dest))]
-      [(sub-inst src dest)
-       (sub-inst (var->deref src) (var->deref dest))]
-      [(mul-inst src dest)
-       (mul-inst (var->deref src) (var->deref dest))]
-      [(div-inst src dest)
-       (div-inst (var->deref src) (var->deref dest))]
-      [(neg-inst var)
-       (neg-inst (var->deref var))]
-      [(ret-inst var)
-       (ret-inst (var->deref var))]
-      [(call-inst var)
-       (call-inst var)]))
+      [(unary-inst op arg) (unary-inst op (var->deref arg))]
+      [(binary-inst op src dest) (binary-inst op (var->deref src) (var->deref dest))]))
   
   (xxprogram stack-size (map apply-deref (xprogram-insts xprog))))
 
 
-
+;;;
 ;;; patch-insts
 (define (patch-insts xxprog)
   #f)
@@ -313,5 +272,6 @@
 
 (define a assign-homes)
 (display "assign-homes") (newline)
+(a (s (f (u '(+ 1 2)))))
 (a (s (f (u '(+ 4 (read))))))
 (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
