@@ -241,8 +241,19 @@
 
 ;;;
 ;;; patch-insts
+;;;
 (define (patch-insts xxprog)
-  #f)
+  
+  (define stack-size (xxprogram-stack-size xxprog))
+
+  (define (patch inst)
+    (match inst
+      [(binary-inst op (? deref? src) (? deref? dest))
+       (list (binary-inst 'mov src (reg 'rax))
+             (binary-inst op (reg 'rax) dest))]
+      [_ inst]))
+
+  (xxprogram stack-size (flatten (map patch (xxprogram-insts xxprog)))))
 
 
 (define u uniquify)
@@ -269,9 +280,13 @@
 (s (f (u '(+ 4 (read)))))
 (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))
 
-
 (define a assign-homes)
 (display "assign-homes") (newline)
 (a (s (f (u '(+ 1 2)))))
 (a (s (f (u '(+ 4 (read))))))
 (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
+
+(define p patch-insts)
+(display "patch-insts") (newline)
+(p (a (s (f (u '(+ 3 (read)))))))
+(p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))))
