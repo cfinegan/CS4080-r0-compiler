@@ -7,6 +7,7 @@ int read_int() {
         perror("read_int failed");
         exit(EXIT_FAILURE);
     }
+    return n;
 }
 
 void write_int(int n) {
@@ -19,6 +20,5 @@ void write_int(int n) {
 extern int r0func();
 
 int main(int argc, char* argv[]) {
-    write_int(r0func());
-    return EXIT_SUCCESS;
+    return r0func();
 }
