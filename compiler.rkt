@@ -62,7 +62,7 @@
   (match lst
     [(list '- arg) (unary-expr 'neg arg)]
     [(list '+ arg1 arg2) (binary-expr 'add arg1 arg2)]
-    [(list '- arg1 arg2) (binary-expr 'sub arg2 arg2)]
+    [(list '- arg1 arg2) (binary-expr 'sub arg1 arg2)]
     [(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
     [(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]))
 
@@ -259,6 +259,10 @@
 (define (fmt-asm op . args)
   (string-append "\t" op "\t" (string-join args ", ") "\n"))
 
+(define (fmt-funcname func-name)
+  (define func-prefix (if (eq? (system-type 'os) 'macosx) "_" ""))
+  (string-append func-prefix func-name))
+
 (define (int->asm n)
   (string-append "$" (number->string n)))
 
@@ -274,12 +278,11 @@
     ['ret "ret"]))
 
 (define (arg->asm arg)
-  (define func-prefix (if (eq? (system-type 'os) 'macosx) "_" ""))
   (match arg
     [(int n) (int->asm n)]
     [(reg r) (string-append "%" (symbol->string r))]
     [(deref r offset) (string-append (if (= offset 0) "" (number->string offset)) "(%" (symbol->string r) ")")]
-    [(? string? str) (string-append func-prefix str)]))
+    [(? string? str) (fmt-funcname str)]))
 
 (define (inst->asm inst)
   (match inst
@@ -292,57 +295,90 @@
 (define (print-asm xxprog)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
-  
+
+  (define asm-prefix (string-append "\t.text\n\t.globl " (fmt-funcname "r0func") "\nr0func:\n"))
+
+  #;
   (define adjust-stack-prefix (fmt-asm "subq" (int->asm stack-size) "%rbp"))
 
+  (define stack-prefix (if (= 0 stack-size) ""
+                           (string-append (fmt-asm "pushq" "%rbp")
+                                          (fmt-asm "movq" "%rsp" "%rbp")
+                                          (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
+
+  #;
   (define adjust-stack-suffix (fmt-asm "addq" (int->asm stack-size) "%rbp"))
 
-  (define main-header (string-append "\t.text\nmain:\n" adjust-stack-prefix))
+  (define stack-suffix (if (= 0 stack-size) ""
+                           (string-append (fmt-asm "addq" (int->asm stack-size) "%rsp")
+                                          (fmt-asm "popq" "%rbp"))))
 
-  (define main-return
-    (string-append adjust-stack-suffix (fmt-asm "retq")))
+  (define main-return (fmt-asm "retq"))
 
-  (define final-asm (string-append main-header (string-join (map inst->asm insts) "") main-return "\n"))
+  (define final-asm
+    (string-append asm-prefix stack-prefix (string-join (map inst->asm insts) "") stack-suffix main-return))
 
   final-asm)
 
+(define (expr->asm expr)
+  (print-asm (patch-insts (assign-homes (select-insts (flatten-code (uniquify expr)))))))
 
-(define u uniquify)
-(display "uniquify") (newline)
-(u '(- 5))
-(u '(+ x 3))
-(u '(- 4 y))
-(u '(let ([x 3] [y 4]) (+ x y)))
-(u '(+ 3 (read)))
+(define (compile-prog input-expr)
+  (define asm-str (expr->asm input-expr))
+  (define out-file (open-output-file "bin/r0func.s" #:exists 'replace))
+  (display asm-str out-file)
+  (close-output-port out-file)
+  (system "make"))
 
-(define f flatten-code)
-(display "flatten") (newline)
-(f 5)
-(f '(- 5))
-(f '(+ 2 3))
-(f '(* 4 5))
-(f '(+ 3 (read)))
-(f (u '(+ 2 (- 3 (/ 4 (- 5))))))
-(f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
+(define (compile-and-run input-expr)
+  (compile-prog input-expr)
+  (system/exit-code "bin\\r0prog"))
 
-(define s select-insts)
-(display "select-insts") (newline)
-(s (f (u 5)))
-(s (f (u '(+ 4 (read)))))
-(s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))
 
-(define a assign-homes)
-(display "assign-homes") (newline)
-(a (s (f (u '(+ 1 2)))))
-(a (s (f (u '(+ 4 (read))))))
-(a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
+;(define u uniquify)
+;(display "uniquify") (newline)
+;(u '(- 5))
+;(u '(+ x 3))
+;(u '(- 4 y))
+;(u '(let ([x 3] [y 4]) (+ x y)))
+;(u '(+ 3 (read)))
+;
+;(define f flatten-code)
+;(display "flatten") (newline)
+;(f 5)
+;(f '(- 5))
+;(f '(+ 2 3))
+;(f '(* 4 5))
+;(f '(+ 3 (read)))
+;(f (u '(+ 2 (- 3 (/ 4 (- 5))))))
+;(f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
+;
+;(define s select-insts)
+;(display "select-insts") (newline)
+;(s (f (u 5)))
+;(s (f (u '(+ 4 (read)))))
+;(s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))
+;
+;(define a assign-homes)
+;(display "assign-homes") (newline)
+;(a (s (f (u '(+ 1 2)))))
+;(a (s (f (u '(+ 4 (read))))))
+;(a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
+;
+;(define p patch-insts)
+;(display "patch-insts") (newline)
+;(p (a (s (f (u '(+ 3 (read)))))))
+;(p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))))
+;
+;(define (pa prog) (display (print-asm prog)))
+;(display "print-asm") (newline)
+;(pa (p (a (s (f (u '(+ (read) 2)))))))
+;(pa (p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))))
+;(pa (p (a (s (f (u '(- 5)))))))
 
-(define p patch-insts)
-(display "patch-insts") (newline)
-(p (a (s (f (u '(+ 3 (read)))))))
-(p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))))
+#;
+(compile-and-run '(let ([x 10] [y 2]) (+ x (- y))))
+#;
+(display (expr->asm '(+ 1 (read))))
 
-(define (pa prog) (display (print-asm prog)))
-(display "print-asm") (newline)
-(pa (p (a (s (f (u '(+ (read) 2)))))))
-(pa (p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))))
+(compile-and-run '(+ 2 (read)))
