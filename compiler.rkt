@@ -332,7 +332,7 @@
 
 (define (compile-and-run input-expr)
   (unless (not (compile-prog input-expr))
-    (system/exit-code (if (eq? (system-type 'os) 'window)
+    (system/exit-code (if (eq? (system-type 'os) 'windows)
                           "bin\\r0prog"
                           "./bin/r0prog"))))
 
