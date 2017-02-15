@@ -256,6 +256,9 @@
   (xxprogram stack-size (flatten (map patch (xxprogram-insts xxprog)))))
 
 
+;;;
+;;; print-asm
+;;;
 (define (fmt-asm op . args)
   (string-append "\t" op "\t" (string-join args ", ") "\n"))
 
@@ -289,25 +292,16 @@
     [(unary-inst op arg) (fmt-asm (op->asm op) (arg->asm arg))]
     [(binary-inst op src dest) (fmt-asm (op->asm op) (arg->asm src) (arg->asm dest))]))
 
-;;;
-;;; print-asm
-;;;
 (define (print-asm xxprog)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
 
   (define asm-prefix (string-append "\t.text\n\t.globl " (fmt-funcname "r0func") "\nr0func:\n"))
 
-  #;
-  (define adjust-stack-prefix (fmt-asm "subq" (int->asm stack-size) "%rbp"))
-
   (define stack-prefix (if (= 0 stack-size) ""
                            (string-append (fmt-asm "pushq" "%rbp")
                                           (fmt-asm "movq" "%rsp" "%rbp")
                                           (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
-
-  #;
-  (define adjust-stack-suffix (fmt-asm "addq" (int->asm stack-size) "%rbp"))
 
   (define stack-suffix (if (= 0 stack-size) ""
                            (string-append (fmt-asm "addq" (int->asm stack-size) "%rsp")
@@ -320,6 +314,9 @@
 
   final-asm)
 
+;;;
+;;; Utils for compiling and runnings ASM code
+;;;
 (define (expr->asm expr)
   (print-asm (patch-insts (assign-homes (select-insts (flatten-code (uniquify expr)))))))
 
