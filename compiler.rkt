@@ -331,8 +331,10 @@
   (system "make"))
 
 (define (compile-and-run input-expr)
-  (compile-prog input-expr)
-  (system/exit-code "bin\\r0prog"))
+  (unless (not (compile-prog input-expr))
+    (system/exit-code (if (eq? (system-type 'os) 'window)
+                          "bin\\r0prog"
+                          "./bin/r0prog"))))
 
 
 ;(define u uniquify)
@@ -380,5 +382,7 @@
 (compile-and-run '(let ([x 10] [y 2]) (+ x (- y))))
 #;
 (display (expr->asm '(+ 1 (read))))
-
+#;
 (compile-and-run '(+ 2 (read)))
+
+(compile-and-run '(* 2 3))
