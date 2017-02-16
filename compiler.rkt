@@ -295,8 +295,9 @@
 (define (print-asm xxprog)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
+  (define r0func-name (fmt-funcname "r0func"))
 
-  (define asm-prefix (string-append "\t.text\n\t.globl " (fmt-funcname "r0func") "\nr0func:\n"))
+  (define asm-prefix (string-append "\t.text\n\t.globl " r0func-name "\n" r0func-name ":\n"))
 
   (define stack-prefix (if (= 0 stack-size) ""
                            (string-append (fmt-asm "pushq" "%rbp")
@@ -379,7 +380,7 @@
 (compile-and-run '(let ([x 10] [y 2]) (+ x (- y))))
 #;
 (display (expr->asm '(+ 1 (read))))
-#;
-(compile-and-run '(+ 2 (read)))
 
+(compile-and-run '(+ 2 (read)))
+#;
 (compile-and-run '(* 2 3))
