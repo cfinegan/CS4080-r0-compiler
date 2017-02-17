@@ -13,10 +13,9 @@
   ;; Returns a new hash table representing a new environment with 'vars' added.
   ;; Symtab maps from names to mangled names.
   (define (symtab-with-vars symtab vars next-id)
-    (define (add-var var table)
+    (for/fold ([table symtab]) ([var vars])
       (define name (car var))
-      (hash-set table name (mangle-name name next-id)))
-    (foldl add-var symtab vars))
+      (hash-set table name (mangle-name name next-id))))
   
   ;; Returns the symtab value indexed by 'name', or 'name' itself if not in table.
   (define (render-name name symtab)
