@@ -63,8 +63,9 @@
     [(list '- arg) (unary-expr 'neg arg)]
     [(list '+ arg1 arg2) (binary-expr 'add arg1 arg2)]
     [(list '- arg1 arg2) (binary-expr 'sub arg1 arg2)]
-    [(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
-    #;[(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]))
+    #;[(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
+    #;[(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]
+    [_ (error "invalid flattened exprssion:" lst)]))
 
 
 ;;;
