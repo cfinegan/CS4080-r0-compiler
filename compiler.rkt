@@ -64,7 +64,7 @@
     [(list '+ arg1 arg2) (binary-expr 'add arg1 arg2)]
     [(list '- arg1 arg2) (binary-expr 'sub arg1 arg2)]
     [(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
-    [(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]))
+    #;[(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]))
 
 
 ;;;
@@ -311,7 +311,7 @@
   (define main-return (fmt-asm "retq"))
 
   (define final-asm
-    (string-append asm-prefix stack-prefix (string-join (map inst->asm insts) "") stack-suffix main-return))
+    (string-append asm-prefix stack-prefix (apply string-append (map inst->asm insts)) stack-suffix main-return))
 
   final-asm)
 
@@ -330,10 +330,35 @@
 
 (define (compile-and-run input-expr)
   (unless (not (compile-prog input-expr))
-    (system/exit-code (if (eq? (system-type 'os) 'windows)
-                          "bin\\r0prog"
-                          "./bin/r0prog"))))
+    (define exit-status
+      (system/exit-code (if (eq? (system-type 'os) 'windows)
+                            "bin\\r0prog"
+                            "./bin/r0prog")))
+    (unless (zero? exit-status)
+      (error "program failed with exit status:" exit-status))))
+    
 
+;; TODO: Fix runtime.c to print output (instead of returning it from main) and turn this back on!
+#;
+(define (compile-and-run input-expr)
+  
+  (define exe-path (if (eq? (system-type 'os) 'windows)
+                       "bin\\r0prog"
+                       "./bin/r0prog"))
+
+  (unless (not (compile-prog input-expr))
+    (define-values (sub-proc stdout stdin stderr)
+      (subprocess #f #f (current-error-port) (string->path exe-path)))
+    (thread (λ ()
+              (display "" stdin)
+              (close-output-port stdin)))
+    (subprocess-wait sub-proc)
+    (define exit-status (subprocess-status sub-proc))
+    (unless (zero? exit-status)
+      (error "error running program:" exit-status))
+    (define a (read stdout))
+    (close-input-port stdout)
+    a))
 
 ;(define u uniquify)
 ;(display "uniquify") (newline)
@@ -376,11 +401,4 @@
 ;(pa (p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))))
 ;(pa (p (a (s (f (u '(- 5)))))))
 
-#;
-(compile-and-run '(let ([x 10] [y 2]) (+ x (- y))))
-#;
-(display (expr->asm '(+ 1 (read))))
-
-(compile-and-run '(+ 2 (read)))
-#;
 (compile-and-run '(* 2 3))

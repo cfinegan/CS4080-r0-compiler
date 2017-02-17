@@ -5,10 +5,11 @@ int read_int() {
     int result, n;
     result = scanf("%d", &n);
     if (result == -1) {
-        perror("read_int failed");
+        perror("scanf failed");
         exit(EXIT_FAILURE);
-    } else if (result == 0) {
-        fprintf(stderr, "invalid value passed to read_int\n");
+    }
+    else if (result == 0) {
+        fprintf(stderr, "error: expected integer\n");
         exit(EXIT_FAILURE);
     }
     return n;
@@ -24,5 +25,6 @@ void write_int(int n) {
 extern int r0func();
 
 int main(int argc, char* argv[]) {
-    return r0func();
+    write_int(r0func());
+    return EXIT_SUCCESS;
 }
