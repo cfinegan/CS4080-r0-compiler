@@ -167,8 +167,7 @@
 
 (struct binary-inst (op src dest) #:transparent)
 
-
-(struct xprogram (vars insts) #:transparent)
+(struct xprogram (vars insts live-afters) #:transparent)
 
 ;;;
 ;;; select-insts
@@ -199,10 +198,26 @@
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
-  (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog)))))
+  (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog))) empty))
 
 
-
+;;;
+;;; uncover-live
+;;;
+(define (uncover-live xprog)
+  (define (drop1 lst) (drop lst 1)) 
+   (for/fold ([out (list empty)]) ([inst (reverse (drop1 (xprogram-insts xprog)))])
+     (cons
+      (filter
+       var?
+       (match inst
+         [(unary-inst op arg)
+          (set-union (first out) (list arg))]
+         [(binary-inst op src dest)
+          (set-union (set-remove (first out) dest) (list src))]))
+      out)))
+    
+    
 (define ptr-size 8)
 
 (struct deref (reg amount) #:transparent)
@@ -356,48 +371,24 @@
     (close-input-port stdout)
     a))
 
-;(define u uniquify)
-;(display "uniquify") (newline)
-;(u '(- 5))
-;(u '(+ x 3))
-;(u '(- 4 y))
-;(u '(let ([x 3] [y 4]) (+ x y)))
-;(u '(+ 3 (read)))
-;
-;(define f flatten-code)
-;(display "flatten") (newline)
-;(f 5)
-;(f '(- 5))
-;(f '(+ 2 3))
-;(f '(* 4 5))
-;(f '(+ 3 (read)))
-;(f (u '(+ 2 (- 3 (/ 4 (- 5))))))
-;(f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))
-;
-;(define s select-insts)
-;(display "select-insts") (newline)
-;(s (f (u 5)))
-;(s (f (u '(+ 4 (read)))))
-;(s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))
-;
-;(define a assign-homes)
-;(display "assign-homes") (newline)
-;(a (s (f (u '(+ 1 2)))))
-;(a (s (f (u '(+ 4 (read))))))
-;(a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))
-;
-;(define p patch-insts)
-;(display "patch-insts") (newline)
-;(p (a (s (f (u '(+ 3 (read)))))))
-;(p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y))))))))
-;
-;(define (pa prog) (display (print-asm prog)))
-;(display "print-asm") (newline)
-;(pa (p (a (s (f (u '(+ (read) 2)))))))
-;(pa (p (a (s (f (u '(let ([x (+ 2 3)] [y 1]) (* x (- y)))))))))
-;(pa (p (a (s (f (u '(- 5)))))))
+;;;
+;;; TESTS
+;;;
+
+
+(define test-expr
+  '(let ([v 1] [w 46])
+     (let ([x (+ v 7)])
+       (let ([y (+ 4 x)] [z (+ x w)])
+         (+ z (- y))))))
+#;
+(define test-expr
+  '(let ([x 1] [y 2])
+     (+ x y)))
 
 #;
-(compile-and-run '(- 1 (+ 5 (- 2))))
+(compile-and-run test-expr)
 
-(compile-and-run '(let ([x 2] [y (+ 4 5)]) (+ x y)))
+(define p (select-insts (flatten-code (uniquify test-expr))))
+p (newline)
+(uncover-live p)
