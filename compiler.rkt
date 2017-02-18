@@ -205,18 +205,29 @@
 ;;; uncover-live
 ;;;
 (define (uncover-live xprog)
-  (define (drop1 lst) (drop lst 1)) 
-   (for/fold ([out (list empty)]) ([inst (reverse (drop1 (xprogram-insts xprog)))])
-     (cons
-      (filter
-       var?
-       (match inst
-         [(unary-inst op arg)
-          (set-union (first out) (list arg))]
-         [(binary-inst op src dest)
-          (set-union (set-remove (first out) dest) (list src))]))
-      out)))
-    
+  (define (drop1 lst) (drop lst 1))
+  (define insts (xprogram-insts xprog))
+  (define vars (xprogram-vars xprog))
+  (define liveness
+    (for/fold ([out (list empty)]) ([inst (reverse (drop1 insts))])
+      (cons
+       (filter
+        var?
+        (match inst
+          [(unary-inst op arg)
+           (set-union (first out) (list arg))]
+          [(binary-inst op src dest)
+           (set-union (set-remove (first out) dest) (list src))]))
+       out)))
+  (xprogram vars insts liveness))
+
+
+;;;
+;;; build-interference
+;;;
+(define (build-interference xprog)
+  #f)
+  
     
 (define ptr-size 8)
 
@@ -375,7 +386,6 @@
 ;;; TESTS
 ;;;
 
-
 (define test-expr
   '(let ([v 1] [w 46])
      (let ([x (+ v 7)])
@@ -389,6 +399,4 @@
 #;
 (compile-and-run test-expr)
 
-(define p (select-insts (flatten-code (uniquify test-expr))))
-p (newline)
-(uncover-live p)
+(uncover-live (select-insts (flatten-code (uniquify test-expr))))
