@@ -20,28 +20,43 @@
   ;; Returns the symtab value indexed by 'name', or 'name' itself if not in table.
   (define (render-name name symtab)
     (hash-ref symtab name name))
-  
-  ;; This code really is terrible...
-  ;; TODO: Replace with pattern matching?
-  (first
-   (let uniquify ([expr (list expr)] [next-id 0] [symtab #hash()])
-     (define (builder-proc elem lst)
-       (cons
-        (cond ([integer? elem] elem)
-              ([symbol? elem] [render-name elem symtab])
-              ([list? elem]
-               [let ([proc (first elem)]
-                     [args (rest elem)])
-                 (if [eq? proc 'let]
-                     [let ([vars (first args)]
-                           [subexpr (second args)])
-                       (uniquify (list proc vars subexpr)
-                                 (add1 next-id)
-                                 (symtab-with-vars symtab vars next-id))]
-                     (uniquify elem next-id symtab))])
-              (else (error "unrecognized token:" elem)))
-        lst))
-     (foldr builder-proc empty expr))))
+
+  (define get-next-id
+    (let ([next-id -1])
+      (λ ()
+        (set! next-id (add1 next-id))
+        next-id)))
+
+  (define (let-var? v)
+    (and (list? v) (= 2 (length v)) (symbol? (first v))))
+
+  (define (unary-op? sym)
+    (eq? sym '-))
+
+  (define (binary-op? sym)
+    (set-member? '(+ -) sym))
+
+  (let uniquify ([expr expr] [symtab #hash()])
+    (define (name? var)
+      (hash-has-key? symtab var))
+    
+    (define (valid-arg? var)
+      (or/c name? integer? list?))
+    
+    (match expr
+      [(? integer? n) n]
+      [(? symbol? sym) (render-name sym symtab)]
+      ['(read) '(read)]
+      [(list 'let (list (? let-var? vars) ...) subexpr)
+       (define next-symtab (symtab-with-vars symtab vars (get-next-id)))
+       (define (render-var var)
+         (list (render-name (first var) next-symtab) (uniquify (second var) symtab)))
+       (list 'let (map render-var vars) (uniquify subexpr next-symtab))]
+      [(list (? unary-op? op) (? valid-arg? arg))
+       (list op (uniquify arg symtab))]
+      [(list (? binary-op? op) (? valid-arg? arg1) (? valid-arg? arg2))
+       (list op (uniquify arg1 symtab) (uniquify arg2 symtab))]
+      [_ (error "uniquify - invalid expr:" expr)])))
 
 
 ;; Creates a new return statement.
@@ -399,4 +414,18 @@
 #;
 (compile-and-run test-expr)
 
+#;
 (uncover-live (select-insts (flatten-code (uniquify test-expr))))
+
+#;
+(uniquify
+ '(let ([x (let ([x 5]) x)])
+    (let ([x (+ x 2)])
+      x)))
+
+(uniquify '(+ 2 3))
+
+
+(uniquify '(let ([x 3] [y 4]) (- x y)))
+
+(compile-and-run '(+ 2 (read)))
