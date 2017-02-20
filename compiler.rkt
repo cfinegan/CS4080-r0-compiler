@@ -411,21 +411,5 @@
   '(let ([x 1] [y 2])
      (+ x y)))
 
-#;
-(compile-and-run test-expr)
-
-#;
-(uncover-live (select-insts (flatten-code (uniquify test-expr))))
-
-#;
-(uniquify
- '(let ([x (let ([x 5]) x)])
-    (let ([x (+ x 2)])
-      x)))
-
-(uniquify '(+ 2 3))
-
-
-(uniquify '(let ([x 3] [y 4]) (- x y)))
-
-(compile-and-run '(+ 2 (read)))
+(flatten-code (uniquify '(- 5) #;'(let ([x 5]) (+ x 3))))
+(display (expr->asm '(let ([x 5]) (+ x 3))))
