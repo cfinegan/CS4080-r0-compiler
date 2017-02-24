@@ -223,7 +223,7 @@
 (define (uncover-live xprog)
 
   (define (reads-dest? op)
-    (eq? op 'mov))
+    (not (eq? op 'mov)))
   
   (define drop1 rest)
   (define insts (xprogram-insts xprog))
@@ -238,8 +238,8 @@
            (set-union (first out) (list arg))]
           [(binary-inst op src dest)
            (if (reads-dest? op)
-               (set-union (set-remove (first out) dest) (list src))
-               (set-union (first out) (list src dest)))]))
+               (set-union (first out) (list src dest))
+               (set-union (set-remove (first out) dest) (list src)))]))
        out)))
   (xprogram vars insts liveness))
 
