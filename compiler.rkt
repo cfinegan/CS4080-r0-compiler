@@ -1,5 +1,7 @@
 #lang racket
 
+(require graph)
+
 ;;;
 ;;; uniquify
 ;;; Returns an expression that is syntactically identical to the input expression, but
@@ -248,8 +250,44 @@
 ;;; build-interference
 ;;;
 (define (build-interference xprog)
-  #f)
+
+  ; note: excluding %rax from caller-saved for now because it's used to special purposes.
+  (define caller-saved '(rcx rdx r8 r9 r10 r11))
+  (define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
   
+  (define vars (xprogram-vars xprog))
+  (define insts (xprogram-insts xprog))
+  (define live-afters (xprogram-live-afters xprog))
+
+  (unless (= (length insts) (length live-afters))
+    (error "insts and live-afters must have the same length"))
+
+  (define graph (unweighted-graph/undirected empty))
+
+  (for ([var vars])
+    (add-vertex! graph var))
+  (for ([reg caller-saved])
+    (add-vertex! graph reg))
+  (for ([reg callee-saved])
+    (add-vertex! graph reg))
+
+  (for ([inst insts] [l-after live-afters])
+    (match inst
+      [(binary-inst 'mov src (? var? dest))
+       (for ([var l-after])
+         (unless (or (equal? var dest) (equal? var src))
+           (add-edge! graph (var-name dest) (var-name var))))]
+      [(binary-inst op src (? var? dest))
+       (for ([var l-after])
+         (unless (equal? var dest)
+           (add-edge! graph (var-name var) (var-name dest))))]
+      [(unary-inst 'call (? string? label))
+       (for ([var l-after])
+         (for ([reg caller-saved])
+           (add-edge! graph reg (var-name var))))]
+      [_ void]))
+
+  graph)  
     
 (define ptr-size 8)
 
@@ -422,3 +460,5 @@
 (define test-xprog (uncover-live (select-insts (flatten-code (uniquify test-expr)))))
 
 test-xprog
+
+(define interference (build-interference test-xprog))
