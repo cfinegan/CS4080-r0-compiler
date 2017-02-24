@@ -249,12 +249,10 @@
 ;;;
 ;;; build-interference
 ;;;
-(define (build-interference xprog)
+(define caller-saved '(rax rcx rdx r8 r9 r10 r11))
+(define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
 
-  ; note: excluding %rax from caller-saved for now because it's used to special purposes.
-  (define caller-saved '(rcx rdx r8 r9 r10 r11))
-  (define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
-  
+(define (build-interference xprog)
   (define vars (xprogram-vars xprog))
   (define insts (xprogram-insts xprog))
   (define live-afters (xprogram-live-afters xprog))
@@ -263,14 +261,7 @@
     (error "insts and live-afters must have the same length"))
 
   (define graph (unweighted-graph/undirected empty))
-
-  (for ([var vars])
-    (add-vertex! graph var))
-  (for ([reg caller-saved])
-    (add-vertex! graph reg))
-  (for ([reg callee-saved])
-    (add-vertex! graph reg))
-
+  
   (for ([inst insts] [l-after live-afters])
     (match inst
       [(binary-inst 'mov src (? var? dest))
@@ -287,39 +278,67 @@
            (add-edge! graph reg (var-name var))))]
       [_ void]))
 
-  graph)  
-    
+  (remove-vertex! graph 'rax)
+  (remove-vertex! graph 'rbp)
+  (remove-vertex! graph 'rsp)
+  graph)
+
+
 (define ptr-size 8)
-
 (struct deref (reg amount) #:transparent)
-
 (struct xxprogram (stack-size insts) #:transparent)
+
+
 
 ;;;
 ;;; assign-homes
-(define (assign-homes xprog)
-  
-  (define var-count (length (xprogram-vars xprog)))
-  (define stack-size (* ptr-size (if (even? var-count) var-count (add1 var-count))))
-  
-  (define var-homes
-    (let map-homes ([vars (xprogram-vars xprog)] [index 0] [homes #hash()])
-      (if (null? vars)
-          homes
-          (map-homes (rest vars) (add1 index) (hash-set homes (first vars) (- (* index ptr-size)))))))
-  
-  (define (var->deref arg)
-    (if (var? arg)
-        (deref 'rbp (hash-ref var-homes (var-name arg)))
-        arg))
+;;;
+(define (assign-homes xprog interference)
 
-  (define (apply-deref inst)
+  ;; TODO: Verify that not using rbp[0] is correct
+  ;;       Increase the amount of registers by (possibly?) using some caller saved ones.
+  ;;       Refactor the valid registers into a vector.
+  ;;       Remove diagnostic prints.
+
+  (define num-valid-registers 1)
+  
+  (define (color->home color)
+    (match color
+      [0 (reg 'rcx)]
+;      [1 (reg 'rdx)]
+;      [2 (reg 'r8)]
+;      [3 (reg 'r9)]
+;      [4 (reg 'r10)]
+;      [5 (reg 'r11)]
+      [(? integer? n) (deref 'rbp (- (* ptr-size (- n (sub1 num-valid-registers)))))]))
+  
+  (define vars (xprogram-vars xprog))
+  (define insts (xprogram-insts xprog))
+  
+  (define-values (num-colors colorings)
+    (coloring/greedy interference))
+
+  (display "num colors: ") (display num-colors) (newline)
+
+  (define spill-count (max 0 (- num-colors num-valid-registers)))
+  (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
+
+  (display "spill count: ") (display spill-count) (newline)
+  (display "stack size: ") (display stack-size) (newline)
+
+  (define (get-var-home tok)
+    (if (var? tok)
+        (color->home (hash-ref colorings (var-name tok)))
+        tok))
+
+  (define (apply-homes inst)
     (match inst
-      [(unary-inst op arg) (unary-inst op (var->deref arg))]
-      [(binary-inst op src dest) (binary-inst op (var->deref src) (var->deref dest))]))
-  
-  (xxprogram stack-size (map apply-deref (xprogram-insts xprog))))
+      [(unary-inst op arg)
+       (unary-inst op (get-var-home arg))]
+      [(binary-inst op src dest)
+       (binary-inst op (get-var-home src) (get-var-home dest))]))
 
+  (xxprogram stack-size (map apply-homes insts)))
 
 ;;;
 ;;; patch-insts
@@ -330,6 +349,10 @@
 
   (define (patch inst)
     (match inst
+      [(binary-inst 'mov (? reg? src) (? reg? dest))
+       (if (equal? src dest)
+           empty
+           inst)]
       [(binary-inst op (? deref? src) (? deref? dest))
        (list (binary-inst 'mov src (reg 'rax))
              (binary-inst op (reg 'rax) dest))]
@@ -381,14 +404,12 @@
 
   (define asm-prefix (string-append "\t.text\n\t.globl " r0func-name "\n" r0func-name ":\n"))
 
-  (define stack-prefix (if (= 0 stack-size) ""
-                           (string-append (fmt-asm "pushq" "%rbp")
-                                          (fmt-asm "movq" "%rsp" "%rbp")
-                                          (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
+  (define stack-prefix (string-append (fmt-asm "pushq" "%rbp")
+                                      (fmt-asm "movq" "%rsp" "%rbp")
+                                      (if (= 0 stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
 
-  (define stack-suffix (if (= 0 stack-size) ""
-                           (string-append (fmt-asm "addq" (int->asm stack-size) "%rsp")
-                                          (fmt-asm "popq" "%rbp"))))
+  (define stack-suffix (string-append (if (= 0 stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
+                                      (fmt-asm "popq" "%rbp")))
 
   (define main-return (fmt-asm "retq"))
 
@@ -401,7 +422,9 @@
 ;;; Utils for compiling and runnings ASM code
 ;;;
 (define (expr->asm expr)
-  (print-asm (patch-insts (assign-homes (select-insts (flatten-code (uniquify expr)))))))
+  (define xprog (uncover-live (select-insts (flatten-code (uniquify expr)))))
+  (define interference (build-interference xprog))
+  (print-asm (patch-insts (assign-homes xprog interference))))
 
 (define (compile-prog input-expr)
   (define asm-str (expr->asm input-expr))
@@ -446,7 +469,7 @@
 ;;; TESTS
 ;;;
 
-
+#;
 (define test-expr
   '(let ([v 1] [w 46])
      (let ([x (+ v 7)])
@@ -457,8 +480,10 @@
   '(let ([x 1] [y 2])
      (+ x y)))
 
-(define test-xprog (uncover-live (select-insts (flatten-code (uniquify test-expr)))))
+(define test-expr
+  '(let ([x (+ 2 3)] [y (- 5)])
+     (let ([x (- x y)] [z (+ x y)])
+       (let ([w (+ z x)])
+         (+ w (- x 1))))))
 
-test-xprog
-
-(define interference (build-interference test-xprog))
+(compile-and-run test-expr)
