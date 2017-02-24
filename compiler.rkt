@@ -221,7 +221,11 @@
 ;;; uncover-live
 ;;;
 (define (uncover-live xprog)
-  (define (drop1 lst) (drop lst 1))
+
+  (define (reads-dest? op)
+    (eq? op 'mov))
+  
+  (define drop1 rest)
   (define insts (xprogram-insts xprog))
   (define vars (xprogram-vars xprog))
   (define liveness
@@ -233,7 +237,9 @@
           [(unary-inst op arg)
            (set-union (first out) (list arg))]
           [(binary-inst op src dest)
-           (set-union (set-remove (first out) dest) (list src))]))
+           (if (reads-dest? op)
+               (set-union (set-remove (first out) dest) (list src))
+               (set-union (first out) (list src dest)))]))
        out)))
   (xprogram vars insts liveness))
 
@@ -402,6 +408,7 @@
 ;;; TESTS
 ;;;
 
+
 (define test-expr
   '(let ([v 1] [w 46])
      (let ([x (+ v 7)])
@@ -412,13 +419,6 @@
   '(let ([x 1] [y 2])
      (+ x y)))
 
-#;
-(flatten-code (uniquify '(let ([x 5]) (+ x 3))))
-#;
-(display (expr->asm '(let ([x 5]) (+ x 3))))
+(define test-xprog (uncover-live (select-insts (flatten-code (uniquify test-expr)))))
 
-#;
-(flatten-code
-   (uniquify '(let ([x 3]) (let ([y (+ x 1)] [z 2]) (+ y z)))))
-
-(flatten-code (uniquify '(let ([x (+ 1 2)] [y (+ 3 4)]) (+ x y))))
+test-xprog
