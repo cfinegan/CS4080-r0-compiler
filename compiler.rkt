@@ -2,6 +2,20 @@
 
 (require graph)
 
+(define (apply-special-forms expr)
+
+  (define (let-var? v)
+  (match v
+    [(list (? symbol?) expr) #t]
+    [_ #f]))
+  
+  (match expr
+    [`(let (,(? let-var? first-var) ,(? let-var? vars) ...) ,subexpr)
+     (if (empty? vars) expr
+         `(let ([,(first first-var) ,(apply-special-forms (second first-var))])
+            ,(apply-special-forms `(let ,vars ,subexpr))))]
+    [_ expr]))
+
 ;;;
 ;;; uniquify
 ;;; Returns an expression that is syntactically identical to the input expression, but
@@ -60,7 +74,6 @@
        (list op (uniquify arg1 symtab) (uniquify arg2 symtab))]
       [_ (error "uniquify - invalid expr:" expr)])))
 
-
 ;; Creates a new return statement.
 (struct return-stmt (arg) #:transparent)
 
@@ -82,6 +95,19 @@
     #;[(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
     #;[(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]
     [_ (error "invalid flattened exprssion:" lst)]))
+
+(define int_t integer?)
+(define bool_t boolean?)
+
+;;;
+;;; typeof
+;;;
+;(define (typeof expr)
+;  (let typeof ([expr expr] [env #hash()])
+;    (match expr
+;      [(? int_t) int_t]
+;      [(? bool_t) bool_t]
+;      [`(let ,
 
 
 ;;;
@@ -425,7 +451,8 @@
 ;;;
 (define (expr->asm expr)
 
-  (define steps (list uniquify flatten-code select-insts uncover-live assign-homes patch-insts print-asm))
+  (define steps (list apply-special-forms uniquify flatten-code select-insts uncover-live
+                      assign-homes patch-insts print-asm))
 
   (for/fold ([prog expr])
             ([step steps])
