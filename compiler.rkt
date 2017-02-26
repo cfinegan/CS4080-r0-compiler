@@ -293,23 +293,25 @@
 ;;;
 ;;; assign-homes
 ;;;
-(define (assign-homes xprog interference)
+(define (assign-homes xprog)
 
   ;; TODO: Verify that not using rbp[0] is correct
   ;;       Increase the amount of registers by (possibly?) using some caller saved ones.
   ;;       Refactor the valid registers into a vector.
   ;;       Remove diagnostic prints.
 
-  (define num-valid-registers 1)
+  (define interference (build-interference xprog))
+
+  (define num-valid-registers 6)
   
   (define (color->home color)
     (match color
       [0 (reg 'rcx)]
-;      [1 (reg 'rdx)]
-;      [2 (reg 'r8)]
-;      [3 (reg 'r9)]
-;      [4 (reg 'r10)]
-;      [5 (reg 'r11)]
+      [1 (reg 'rdx)]
+      [2 (reg 'r8)]
+      [3 (reg 'r9)]
+      [4 (reg 'r10)]
+      [5 (reg 'r11)]
       [(? integer? n) (deref 'rbp (- (* ptr-size (- n (sub1 num-valid-registers)))))]))
   
   (define vars (xprogram-vars xprog))
@@ -422,9 +424,16 @@
 ;;; Utils for compiling and runnings ASM code
 ;;;
 (define (expr->asm expr)
-  (define xprog (uncover-live (select-insts (flatten-code (uniquify expr)))))
-  (define interference (build-interference xprog))
-  (print-asm (patch-insts (assign-homes xprog interference))))
+
+  (define steps (list uniquify flatten-code select-insts uncover-live assign-homes patch-insts print-asm))
+
+  (for/fold ([prog expr])
+            ([step steps])
+    (call-with-values (λ () prog) step)))
+  
+;  (define xprog (uncover-live (select-insts (flatten-code (uniquify expr)))))
+;  #;(define interference (build-interference xprog))
+;  (print-asm (patch-insts (assign-homes xprog))))
 
 (define (compile-prog input-expr)
   (define asm-str (expr->asm input-expr))
