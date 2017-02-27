@@ -3,17 +3,32 @@
 (require graph)
 
 (define (apply-special-forms expr)
-
-  (define (let-var? v)
-  (match v
-    [(list (? symbol?) expr) #t]
-    [_ #f]))
-  
+  (define r apply-special-forms)
   (match expr
-    [`(let (,(? let-var? first-var) ,(? let-var? vars) ...) ,subexpr)
-     (if (empty? vars) expr
-         `(let ([,(first first-var) ,(apply-special-forms (second first-var))])
-            ,(apply-special-forms `(let ,vars ,subexpr))))]
+    [`(or ,arg1 ,arg2)
+     `(let  ([or.tmp ,(r arg1)])
+        (if or.tmp or.tmp ,(r arg2)))]
+    [`(and ,arg1 ,arg2)
+     `(if ,(r arg1) ,(r arg2) #f)]
+    [`(not ,exp)
+     `(if ,exp #f #t)]
+    [`(+ ,val 0) val]
+    [`(+ 0 ,val) val]
+    [`(- ,val 0) val]
+    [`(- 0, val) `(- ,val)]
+    [`(* ,val 1) val]
+    [`(* 1 ,val) val]
+    [`(* ,val 0) 0]
+    [`(* 0 ,val) 0]
+    [`(/ ,val 1) val]
+    [`(/ 0 ,val) 0]
+    [`(/ ,val 0) (error "cannot divide by zero:" expr)]
+    [`(+ ,arg1 ,args ...)
+     `(+ ,(r arg1) ,(r (cons '+ args)))]
+    [`(- ,arg1 ,args ...)
+     `(- ,(r arg1) ,(r (cons '- args)))]
+    [`(* ,arg1 , args ...)
+     `(* ,(r arg1) ,(r (cons '* args)))]
     [_ expr]))
 
 ;;;
@@ -98,6 +113,21 @@
 
 (define int_t integer?)
 (define bool_t boolean?)
+
+;(define (typeof expr)
+;  (let typeof ([expr expr] [env #hash()])
+;    (match expr
+;      [(? int_t) int_t]
+;      [(? bool_t) bool_t]
+;      [(list (? (or/c '+ '-) op) left right)
+;       (unless (and (eq? int_t (typeof left)) (eq? int_t (typeof right)))
+;         (error "expr failed type check:" expr))
+;       int_t]
+;      [(list '- arg)
+;       (unless (eq? int_t (typeof arg))
+;         (error "expr failed type check:" expr))
+;       int_t]
+       
 
 ;;;
 ;;; typeof
