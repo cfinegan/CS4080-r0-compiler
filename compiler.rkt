@@ -2,33 +2,39 @@
 
 (require graph)
 
-(define (apply-special-forms expr)
-  (define r apply-special-forms)
+(define (expand expr)
+  (define (ex-proc? arg)
+    (set-member? '(+ - * or and) arg))
+  (define ex expand)
   (match expr
-    [`(or ,arg1 ,arg2)
-     `(let  ([or.tmp ,(r arg1)])
-        (if or.tmp or.tmp ,(r arg2)))]
-    [`(and ,arg1 ,arg2)
-     `(if ,(r arg1) ,(r arg2) #f)]
-    [`(not ,exp)
-     `(if ,exp #f #t)]
-    [`(+ ,val 0) val]
-    [`(+ 0 ,val) val]
-    [`(- ,val 0) val]
-    [`(- 0, val) `(- ,val)]
-    [`(* ,val 1) val]
-    [`(* 1 ,val) val]
+
+    ; Special cases for arithmetic
+    ; TODO: recursion
+    [`(+ ,val 0) (ex val)]
+    [`(+ 0 ,val) (ex val)]
+    [`(- ,val 0) (ex val)]
+    [`(- 0, val) `(- ,(ex val))]
+    [`(- ,(? integer? n)) (- n)]
+    [`(* ,val 1) (ex val)]
+    [`(* 1 ,val) (ex val)]
     [`(* ,val 0) 0]
     [`(* 0 ,val) 0]
-    [`(/ ,val 1) val]
-    [`(/ 0 ,val) 0]
-    [`(/ ,val 0) (error "cannot divide by zero:" expr)]
-    [`(+ ,arg1 ,args ...)
-     `(+ ,(r arg1) ,(r (cons '+ args)))]
-    [`(- ,arg1 ,args ...)
-     `(- ,(r arg1) ,(r (cons '- args)))]
-    [`(* ,arg1 , args ...)
-     `(* ,(r arg1) ,(r (cons '* args)))]
+    [`(/ ,val 1) (ex val)]
+
+    ; 2-arg or
+    [`(or ,arg1 ,arg2)
+     `(let ([or.tmp ,(ex arg1)])
+        (if or.tmp or.tmp ,(ex arg2)))]
+
+    ; 2-arg and
+    [`(and ,arg1 ,arg2)
+     `(if ,(ex arg1) ,(ex arg2) #f)]
+    
+    ; Breaks var-args ops into 'pyramid' of calls
+    [`(,(? ex-proc? op) ,arg1 ,args ..2)
+     (ex `(,op ,(ex arg1) ,(ex (cons op args))))]
+
+    ; Default
     [_ expr]))
 
 ;;;
@@ -305,7 +311,8 @@
 ;;;
 ;;; build-interference
 ;;;
-(define caller-saved '(rax rcx rdx r8 r9 r10 r11))
+;; Note: %rax omitted because it's used by compiler as scratch.
+(define caller-saved '(rcx rdx r8 r9 r10 r11))
 (define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
 
 (define (build-interference xprog)
@@ -334,9 +341,6 @@
            (add-edge! graph reg (var-name var))))]
       [_ void]))
 
-  (remove-vertex! graph 'rax)
-  (remove-vertex! graph 'rbp)
-  (remove-vertex! graph 'rsp)
   graph)
 
 
@@ -345,33 +349,31 @@
 (struct xxprogram (stack-size insts) #:transparent)
 
 
+(define alloc-registers #(rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
+                              ; rcx rdx r8 r9 r10 r11 ;; caller-saved (commented out b/c not saving properly)
+                              ))
 
 ;;;
 ;;; assign-homes
 ;;;
 (define (assign-homes xprog)
 
-  ;; TODO: Verify that not using rbp[0] is correct
-  ;;       Increase the amount of registers by (possibly?) using some caller saved ones.
-  ;;       Refactor the valid registers into a vector.
+  ;; TODO: Verify that using rbp[0] is correct.
+  ;;       Figure out why saving caller-saved registers before a function call crashes the program.
   ;;       Remove diagnostic prints.
 
   (define interference (build-interference xprog))
 
-  (define num-valid-registers 6)
-  
+  (define num-valid-registers (vector-length alloc-registers))
+
   (define (color->home color)
-    (match color
-      [0 (reg 'rcx)]
-      [1 (reg 'rdx)]
-      [2 (reg 'r8)]
-      [3 (reg 'r9)]
-      [4 (reg 'r10)]
-      [5 (reg 'r11)]
-      [(? integer? n) (deref 'rbp (- (* ptr-size (- n (sub1 num-valid-registers)))))]))
+    (if (< color num-valid-registers)
+        (reg (vector-ref alloc-registers color))
+        (deref 'rbp (- (* ptr-size (- color num-valid-registers))))))
   
   (define vars (xprogram-vars xprog))
   (define insts (xprogram-insts xprog))
+  (define liveness (xprogram-live-afters xprog))
   
   (define-values (num-colors colorings)
     (coloring/greedy interference))
@@ -389,14 +391,25 @@
         (color->home (hash-ref colorings (var-name tok)))
         tok))
 
-  (define (apply-homes inst)
-    (match inst
-      [(unary-inst op arg)
-       (unary-inst op (get-var-home arg))]
-      [(binary-inst op src dest)
-       (binary-inst op (get-var-home src) (get-var-home dest))]))
+  (define home-insts
+    (flatten
+     (reverse
+      (for/fold ([out empty])
+                ([inst insts] [l-afters liveness])
+        (cons
+         (match inst
+           [(unary-inst 'call func)
+            (define lives (set-intersect (map get-var-home l-afters) (map reg caller-saved)))
+            (append (map (λ (var) (unary-inst 'push var)) lives)
+                    (list inst)
+                    (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
+           [(unary-inst op arg)
+            (unary-inst op (get-var-home arg))]
+           [(binary-inst op src dest)
+            (binary-inst op (get-var-home src) (get-var-home dest))])
+         out)))))
 
-  (xxprogram stack-size (map apply-homes insts)))
+  (xxprogram stack-size home-insts))
 
 ;;;
 ;;; patch-insts
@@ -441,7 +454,9 @@
     ['mul "imulq"]
     ['div "idivq"]
     ['call "callq"]
-    ['ret "ret"]))
+    ['ret "ret"]
+    ['pop "popq"]
+    ['push "pushq"]))
 
 (define (arg->asm arg)
   (match arg
@@ -481,7 +496,7 @@
 ;;;
 (define (expr->asm expr)
 
-  (define steps (list apply-special-forms uniquify flatten-code select-insts uncover-live
+  (define steps (list uniquify flatten-code select-insts uncover-live
                       assign-homes patch-insts print-asm))
 
   (for/fold ([prog expr])
@@ -546,10 +561,17 @@
   '(let ([x 1] [y 2])
      (+ x y)))
 
+#;
 (define test-expr
-  '(let ([x (+ 2 3)] [y (- 5)])
+  '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
        (let ([w (+ z x)])
-         (+ w (- x 1))))))
+         (+ w (- x (+ a 2)))))))
+
+
+(define test-expr
+  '(let ([a (read)] [b (read)] [c (read)] [d (read)])
+     (+ a (+ b (+ c d)))))
+
 
 (compile-and-run test-expr)
