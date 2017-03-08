@@ -9,7 +9,6 @@
   (match expr
 
     ; Special cases for arithmetic
-    ; TODO: recursion
     [`(+ ,val 0) (ex val)]
     [`(+ 0 ,val) (ex val)]
     [`(- ,val 0) (ex val)]
@@ -81,18 +80,18 @@
       (or/c name? integer? list?))
     
     (match expr
-      [(? integer? n) n]
-      [(? symbol? sym) (render-name sym symtab)]
+      [(? integer?) expr]
+      [(? symbol?) (render-name expr symtab)]
       ['(read) '(read)]
-      [(list 'let (list (? let-var? vars) ...) subexpr)
+      [`(let (,(? let-var? vars) ...) ,subexpr)
        (define next-symtab (symtab-with-vars symtab vars (get-next-id)))
        (define (render-var var)
-         (list (render-name (first var) next-symtab) (uniquify (second var) symtab)))
-       (list 'let (map render-var vars) (uniquify subexpr next-symtab))]
-      [(list (? unary-op? op) (? valid-arg? arg))
-       (list op (uniquify arg symtab))]
-      [(list (? binary-op? op) (? valid-arg? arg1) (? valid-arg? arg2))
-       (list op (uniquify arg1 symtab) (uniquify arg2 symtab))]
+         `(,(render-name (first var) next-symtab) ,(uniquify (second var) symtab)))
+       `(let ,(map render-var vars) ,(uniquify subexpr next-symtab))]
+      [`(,(? unary-op? op) ,(? valid-arg? arg))
+       `(,op ,(uniquify arg symtab))]
+      [`(,(? binary-op? op) ,(? valid-arg? arg1) ,(? valid-arg? arg2))
+       `(,op ,(uniquify arg1 symtab) ,(uniquify arg2 symtab))]
       [_ (error "uniquify - invalid expr:" expr)])))
 
 ;; Creates a new return statement.
@@ -108,6 +107,7 @@
 
 (struct binary-expr (op src dest) #:transparent)
 
+#;
 (define (list->expr lst)
   (match lst
     [(list '- arg) (unary-expr 'neg arg)]
@@ -116,6 +116,13 @@
     #;[(list '* arg1 arg2) (binary-expr 'mul arg1 arg2)]
     #;[(list '/ arg1 arg2) (binary-expr 'div arg1 arg2)]
     [_ (error "invalid flattened exprssion:" lst)]))
+
+(define (list->expr lst)
+  (match lst
+    [`(- ,arg) (unary-expr 'neg arg)]
+    [`(+ ,arg1 ,arg2) (binary-expr 'add arg1 arg2)]
+    [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
+    [_ (error "invalid falttened expression:" lst)]))
 
 (define int_t integer?)
 (define bool_t boolean?)
