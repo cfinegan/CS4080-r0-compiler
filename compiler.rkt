@@ -282,13 +282,14 @@
 ;;; uncover-live
 ;;;
 (define (uncover-live xprog)
-
+  
+  (match-define (xprogram vars insts _) xprog)
+  
   (define (reads-dest? op)
     (not (eq? op 'mov)))
   
   (define drop1 rest)
-  (define insts (xprogram-insts xprog))
-  (define vars (xprogram-vars xprog))
+  
   (define liveness
     (for/fold ([out (list empty)]) ([inst (reverse (drop1 insts))])
       (cons
@@ -313,9 +314,8 @@
 (define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
 
 (define (build-interference xprog)
-  (define vars (xprogram-vars xprog))
-  (define insts (xprogram-insts xprog))
-  (define live-afters (xprogram-live-afters xprog))
+
+  (match-define (xprogram vars insts live-afters) xprog)
 
   (unless (= (length insts) (length live-afters))
     (error "insts and live-afters must have the same length"))
@@ -359,6 +359,8 @@
   ;;       Figure out why saving caller-saved registers before a function call crashes the program.
   ;;       Remove diagnostic prints.
 
+  (match-define (xprogram vars insts liveness) xprog)
+
   (define interference (build-interference xprog))
 
   (define num-valid-registers (vector-length alloc-registers))
@@ -367,11 +369,7 @@
     (if (< color num-valid-registers)
         (reg (vector-ref alloc-registers color))
         (deref 'rbp (- (* ptr-size (- color num-valid-registers))))))
-  
-  (define vars (xprogram-vars xprog))
-  (define insts (xprogram-insts xprog))
-  (define liveness (xprogram-live-afters xprog))
-  
+    
   (define-values (num-colors colorings)
     (coloring/greedy interference))
 
@@ -412,8 +410,8 @@
 ;;; patch-insts
 ;;;
 (define (patch-insts xxprog)
-  
-  (define stack-size (xxprogram-stack-size xxprog))
+
+  (match-define (xxprogram stack-size insts) xxprog)
 
   (define (patch inst)
     (match inst
@@ -426,7 +424,7 @@
              (binary-inst op (reg 'rax) dest))]
       [_ inst]))
 
-  (xxprogram stack-size (flatten (map patch (xxprogram-insts xxprog)))))
+  (xxprogram stack-size (flatten (map patch insts))))
 
 
 ;;;
