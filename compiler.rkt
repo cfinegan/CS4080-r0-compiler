@@ -114,8 +114,11 @@
     [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
     [_ (error "invalid falttened expression:" lst)]))
 
+(struct typed-expr (type expr))
+
 (define int_t integer?)
 (define bool_t boolean?)
+      
 
 ;(define (typeof expr)
 ;  (let typeof ([expr expr] [env #hash()])
@@ -355,7 +358,7 @@
 ;;;
 (define (assign-homes xprog)
 
-  ;; TODO: Verify that using rbp[0] is correct.
+  ;; TODO: Verify that *not* using rbp[0] is correct.
   ;;       Figure out why saving caller-saved registers before a function call crashes the program.
   ;;       Remove diagnostic prints.
 
@@ -368,7 +371,7 @@
   (define (color->home color)
     (if (< color num-valid-registers)
         (reg (vector-ref alloc-registers color))
-        (deref 'rbp (- (* ptr-size (- color num-valid-registers))))))
+        (deref 'rbp (- (* ptr-size (add1 (- color num-valid-registers)))))))
     
   (define-values (num-colors colorings)
     (coloring/greedy interference))
