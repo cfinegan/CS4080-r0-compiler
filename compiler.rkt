@@ -36,6 +36,11 @@
     ; Default
     [_ expr]))
 
+
+;; Returns true if argument is a list in the form expected by the let macro.
+(define (let-var? v)
+  (and (list? v) (= 2 (length v)) (symbol? (first v))))
+
 ;;;
 ;;; uniquify
 ;;; Returns an expression that is syntactically identical to the input expression, but
@@ -62,9 +67,6 @@
       (λ ()
         (set! next-id (add1 next-id))
         next-id)))
-
-  (define (let-var? v)
-    (and (list? v) (= 2 (length v)) (symbol? (first v))))
 
   (define (unary-op? sym)
     (eq? sym '-))
@@ -112,39 +114,60 @@
     [`(- ,arg) (unary-expr 'neg arg)]
     [`(+ ,arg1 ,arg2) (binary-expr 'add arg1 arg2)]
     [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
-    [_ (error "invalid falttened expression:" lst)]))
+    [_ (error "invalid flattened expression:" lst)]))
 
-(struct typed-expr (type expr))
-
-(define int_t integer?)
-(define bool_t boolean?)
-      
-
-;(define (typeof expr)
-;  (let typeof ([expr expr] [env #hash()])
-;    (match expr
-;      [(? int_t) int_t]
-;      [(? bool_t) bool_t]
-;      [(list (? (or/c '+ '-) op) left right)
-;       (unless (and (eq? int_t (typeof left)) (eq? int_t (typeof right)))
-;         (error "expr failed type check:" expr))
-;       int_t]
-;      [(list '- arg)
-;       (unless (eq? int_t (typeof arg))
-;         (error "expr failed type check:" expr))
-;       int_t]
-       
+;; Defines types for use in validating program integrity.
+(define Integer 'Integer)
+(define Boolean 'Boolean)
 
 ;;;
-;;; typeof
+;;; typeof: Returns the type of any well-formed expression.
 ;;;
-;(define (typeof expr)
-;  (let typeof ([expr expr] [env #hash()])
-;    (match expr
-;      [(? int_t) int_t]
-;      [(? bool_t) bool_t]
-;      [`(let ,
-
+(define (typeof expr)
+  (define (bool-op? op)
+    (set-member? '(= < > <= >=) op))
+  (define (int-op? op)
+    (set-member? '(+ -) op))
+  (let typeof ([expr expr] [env #hash()])
+    (match expr
+      [(? integer?) Integer]
+      [(? boolean?) Boolean]
+      [(? symbol?)
+       (hash-ref env expr (error "typeof: Undeclared symbol:" expr))]
+      ;; boolean statement
+      [`(,(? bool-op?) ,args ...)
+       (for-each
+        (λ (arg)
+          (unless (eq? (typeof arg env) Integer)
+            (error (string-append "typeof: Invalid argument (expected Integer) '" (~a arg) "' in expr: " (~a expr)))))
+        args)
+       Boolean]
+      ;; arithmetic statement
+      [`(,(? int-op?) ,args ...)
+       (for-each
+        (λ (arg)
+          (unless (eq? (typeof arg env) Integer)
+            (error (string-append "typeof: Invalid argument (expected Integer) '" (~a arg) "' in expr: " (~a expr)))))
+        args)
+       Integer]
+      ;; if statement
+      [`(if ,cond ,then ,otherwise)
+       (unless (eq? (typeof cond env) Boolean)
+         (error (string-append "typeof: Invalid conditional (expected Boolean) '" (~a cond) "' in expr: " (~a expr))))
+       (define then-type (typeof then env))
+       (unless (eq? then-type (typeof otherwise env))
+         (error (string-append "typeof: Conditional statements '" (~a then) "' and '"
+                               (~a otherwise) "' mismatch types in expr: " (~a expr))))
+       then-type]
+      ;; let statement
+      [`(let (,(? let-var? vars) ...) ,subexpr)
+       (define next-env
+         (for/fold ([table env]) ([var vars])
+           (define name (first var))
+           (define var-expr (second var))
+           (hash-set table name (typeof var-expr env))))
+       (typeof subexpr next-env)]
+      [_ (error "typeof: Invalid expr:" expr)])))
 
 ;;;
 ;;; flatten-code
@@ -571,5 +594,5 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-
+#;
 (compile-and-run test-expr)
