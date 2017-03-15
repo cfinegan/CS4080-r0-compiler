@@ -2,37 +2,49 @@
 
 (require graph)
 
-(define (expand expr)
-  (define (ex-proc? arg)
-    (set-member? '(+ - * or and) arg))
-  (define ex expand)
+(define (replace-syntax expr)
+  (define r replace-syntax)
   (match expr
+    ; not
+    [`(not ,arg)
+     `(if ,(r arg) #f #t)]
+    ; or
+    [`(or ,arg1 ,arg2)
+     `(let ([or.tmp ,(r arg1)])
+        (if or.tmp or.tmp ,(r arg2)))]
+    ; and
+    [`(and ,arg1 ,arg2)
+     `(if ,(r arg1) ,(r arg2) #f)]
+    ; Breaks var-args into 'pyramid' of calls
+    [`(,(? (λ (op) (set-member? '(+ - * or and) op)) op) ,arg1 ,args ..2)
+     `(,op ,(r arg1) ,(r (cons op args)))]
+    ; Recursively call self on nested calls.
+    [`(,proc ,args ...)
+     (cons proc (map r args))]
+    ; Default
+    [_ expr]))
 
+(define (optimize expr)
+  (define opt optimize)
+  (match expr
     ; Special cases for arithmetic
-    [`(+ ,val 0) (ex val)]
-    [`(+ 0 ,val) (ex val)]
-    [`(- ,val 0) (ex val)]
-    [`(- 0, val) `(- ,(ex val))]
+    [`(+ ,val 0) (opt val)]
+    [`(+ 0 ,val) (opt val)]
+    [`(- ,val 0) (opt val)]
+    [`(- 0, val) `(- ,(opt val))]
     [`(- ,(? integer? n)) (- n)]
-    [`(* ,val 1) (ex val)]
-    [`(* 1 ,val) (ex val)]
+    [`(* ,val 1) (opt val)]
+    [`(* 1 ,val) (opt val)]
     [`(* ,val 0) 0]
     [`(* 0 ,val) 0]
-    [`(/ ,val 1) (ex val)]
-
-    ; 2-arg or
-    [`(or ,arg1 ,arg2)
-     `(let ([or.tmp ,(ex arg1)])
-        (if or.tmp or.tmp ,(ex arg2)))]
-
-    ; 2-arg and
-    [`(and ,arg1 ,arg2)
-     `(if ,(ex arg1) ,(ex arg2) #f)]
-    
-    ; Breaks var-args ops into 'pyramid' of calls
-    [`(,(? ex-proc? op) ,arg1 ,args ..2)
-     (ex `(,op ,(ex arg1) ,(ex (cons op args))))]
-
+    [`(/ ,val 1) (opt val)]
+    ; Special cases for boolean logic
+    [`(not ,(? boolean? b)) (not b)]
+    [`(if #t ,then ,otherwise) (opt then)]
+    [`(if #f ,then ,otherwise) (opt otherwise)]
+    ; Recursively call self on nested calls.
+    [`(,proc ,args ...)
+     (cons proc (map opt args))]
     ; Default
     [_ expr]))
 
