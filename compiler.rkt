@@ -40,11 +40,9 @@
     [`(/ ,val 1) (opt val)]
     ; Special cases for boolean logic
     [`(not ,(? boolean? b)) (not b)]
-    [`(if #t ,then ,otherwise) (opt then)]
-    [`(if #f ,then ,otherwise) (opt otherwise)]
     ; Recursively call self on nested calls.
-    [`(,proc ,args ...)
-     (cons proc (map opt args))]
+    #;[`(,proc ,args ...)
+     (cons proc (map opt args))] 
     ; Default
     [_ expr]))
 
