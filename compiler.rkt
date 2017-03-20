@@ -41,8 +41,7 @@
     ; Special cases for boolean logic
     [`(not ,(? boolean? b)) (not b)]
     ; Recursively call self on nested calls.
-    #;[`(,proc ,args ...)
-     (cons proc (map opt args))] 
+    [(? list?) (map opt expr)]
     ; Default
     [_ expr]))
 
