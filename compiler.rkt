@@ -92,6 +92,7 @@
     
     (match expr
       [(? integer?) expr]
+      [(? boolean?) expr]
       [(? symbol?) (render-name expr symtab)]
       ['(read) '(read)]
       [`(let (,(? let-var? vars) ...) ,subexpr)
@@ -99,6 +100,8 @@
        (define (render-var var)
          `(,(render-name (first var) next-symtab) ,(uniquify (second var) symtab)))
        `(let ,(map render-var vars) ,(uniquify subexpr next-symtab))]
+      [`(if ,cond ,then ,otherwise)
+       `(if ,(uniquify cond symtab) ,(uniquify then symtab) ,(uniquify otherwise symtab))]
       [`(,(? unary-op? op) ,(? valid-arg? arg))
        `(,op ,(uniquify arg symtab))]
       [`(,(? binary-op? op) ,(? valid-arg? arg1) ,(? valid-arg? arg2))
@@ -141,8 +144,8 @@
     (match expr
       [(? integer?) Integer]
       [(? boolean?) Boolean]
-      [(? symbol?)
-       (hash-ref env expr (error "typeof: Undeclared symbol:" expr))]
+      [(? symbol?) (hash-ref env expr)]
+      [`(read) Integer]
       ;; boolean statement
       [`(,(? bool-op?) ,args ...)
        (for-each
@@ -183,6 +186,9 @@
 ;;; Flattens an expression into a series of statements which only reference integers
 ;;; or variable names.
 (define (flatten-code expr)
+
+  ;; Should have the side effect of erroring if there are type errors in the program.
+  (define expr-type (typeof expr))
   
   ;; Always returns the 'next' temporary name. Encapsulates mutable state.
   (define next-tmp-name
@@ -194,79 +200,52 @@
   ;; Self-executing closure around helper procedures prevents recursive calls to flatten-code
   ;; from resetting the tmp-name count.
   (let flatten-code ([expr expr] [vartab #hash()])
-    
-    ;; Flattens an integer literal into a program that returns arg.
-    (define (flatten-int arg)
-      (program empty (list (return-stmt arg))))
-    
-    ;; Flattens a variable name into a program that declares that name and returns it.
-    (define (flatten-var arg)
-      (program (list arg) (list (return-stmt arg))))
-    
-    ;; Flattens a read expression into a program that assigns 'read to a variable and returns it.
-    (define (flatten-read)
-      (define dest-name (next-tmp-name))
-      (program (list dest-name) (list (assign-stmt 'read dest-name)
-                                      (return-stmt dest-name))))
-    
-    ;; Flattens a negation expression into a program that negates arg and returns it.
-    (define (flatten-neg arg)
-      (match-define (program (list vars ...) (list stmts ... (return-stmt ans))) (flatten-code arg vartab))
-      (define dest-name (next-tmp-name))
-      (program (set-union (list dest-name) vars)
-               (append stmts (list (assign-stmt (unary-expr 'neg ans) dest-name)
-                                   (return-stmt dest-name)))))
-    
-    ;; Flattens an arithmetic expression into a program that applies proc-naem to L and R, stores
-    ;; the result in a variable, and returns it.
-    (define (flatten-arith proc-name L R)
-      (match-define (program (list L-vars ...) (list L-stmts ... (return-stmt L-ans))) (flatten-code L vartab))
-      (match-define (program (list R-vars ...) (list R-stmts ... (return-stmt R-ans))) (flatten-code R vartab))
-      (define dest-name (next-tmp-name))
-      (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
-               (append L-stmts R-stmts (list (assign-stmt (list->expr (list proc-name L-ans R-ans)) dest-name)
-                                             (return-stmt dest-name)))))
-    
-    ;; Flattens a let expression by breaking the var expressions into programs and appending them to subexpr.
-    (define (flatten-let vars subexpr)
-      
-      (define-values (next-vartab var-prog)
-        (for/fold ([vartab vartab] [var-prog (program empty empty)])
-                  ([var vars])
-          (define var-name (first var))
-          (define var-expr (second var))
-          (match-define (program (list vars ...) (list stmts ... (return-stmt ans))) (flatten-code var-expr vartab))
-          (values (hash-set vartab var-name ans)
-                  (program (set-union (program-vars var-prog) vars)
-                           (append (program-stmts var-prog) stmts)))))
-      
-      (define subexpr-prog (flatten-code subexpr next-vartab))
-
-      (program (set-union (program-vars var-prog) (program-vars subexpr-prog))
-               (append (program-stmts var-prog) (program-stmts subexpr-prog))))
-
-    
-    ;; flatten-code procedure body.
-    (cond [(integer? expr) (flatten-int expr)]
-          [(symbol? expr)
-           (define name-ref (hash-ref vartab expr #f))
-           (if name-ref
-               (flatten-code name-ref vartab)
-               (flatten-var expr))]
-           ;(flatten-var expr)]
-          [(list? expr)
-           (let ([proc (first expr)]
-                 [args (rest expr)])
-             (cond [(eq? proc 'read)
-                    (flatten-read)]
-                   [(eq? proc 'let)
-                    (flatten-let (first args) (second args))]
-                   [(and (eq? proc '-) (= (length args) 1))
-                    (flatten-neg (first args))]
-                   [(set-member? '(+ - * /) proc)
-                    (flatten-arith proc (first args) (second args))]
-                   [else (error "unrecognized procedure name:" proc)]))]
-          [else (error "unrecognized expression:" expr)])))
+    (match expr
+      [(? integer?) (program empty (list (return-stmt expr)))]
+      [(? boolean?) (program empty (list (return-stmt expr)))]
+      [(? symbol?)
+       (define name-ref (hash-ref vartab expr #f))
+       (if name-ref
+           (flatten-code name-ref vartab)
+           (program (list expr) (list (return-stmt expr))))]
+      ;; read expression
+      [`(read)
+       (define dest-name (next-tmp-name))
+       (program (list dest-name) (list (assign-stmt 'read dest-name)
+                                       (return-stmt dest-name)))]
+      ;; let expression
+      [`(let (,(? let-var? vars)...) ,subexpr)
+       (define-values (next-vartab var-prog)
+         (for/fold ([vartab vartab] [var-prog (program empty empty)])
+                   ([var vars])
+           (define var-name (first var))
+           (define var-expr (second var))
+           (match-define (program (list vars ...) (list stmts ... (return-stmt ans)))
+             (flatten-code var-expr vartab))
+           (values (hash-set vartab var-name ans)
+                   (program (set-union (program-vars var-prog) vars)
+                            (append (program-stmts var-prog) stmts)))))
+       (define subexpr-prog (flatten-code subexpr next-vartab))
+       (program (set-union (program-vars var-prog) (program-vars subexpr-prog))
+                (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
+      ;; unary negation
+      [`(- ,subexpr)
+       (match-define (program (list vars ...)  (list stmts ... (return-stmt ans)))
+         (flatten-code subexpr vartab))
+       (define dest-name (next-tmp-name))
+       (program (set-union (list dest-name) vars)
+                (append stmts (list (assign-stmt (unary-expr 'neg ans) dest-name)
+                                    (return-stmt dest-name))))]
+      ;; binary arithmetic
+      [`(,(? (λ (op) (set-member? '(+ -) op)) op) ,L ,R)
+       (match-define (program (list L-vars ...) (list L-stmts ... (return-stmt L-ans)))
+         (flatten-code L vartab))
+       (match-define (program (list R-vars ...) (list R-stmts ... (return-stmt R-ans)))
+         (flatten-code R vartab))
+       (define dest-name (next-tmp-name))
+       (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
+                (append L-stmts R-stmts (list (assign-stmt (list->expr (list op L-ans R-ans)) dest-name)
+                                              (return-stmt dest-name))))])))
 
 
 (struct int (val) #:transparent)
@@ -598,10 +577,13 @@
        (let ([w (+ z x)])
          (+ w (- x (+ a 2)))))))
 
-
+#;
 (define test-expr
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-#;
+
+(define test-expr
+  '(if #t (+ 1 2) 3))
+
 (compile-and-run test-expr)
