@@ -306,9 +306,8 @@
           (list (binary-inst 'mov (arg->val arg) (var dest))
                 (binary-inst 'xor (int 1) (var dest)))]
          [`(,(? boolean-op? op) ,arg1 ,arg2)
-          (list (binary-inst 'cmp (arg->val arg2)(arg->val arg1)) ;; TODO: crashes, both args can't be primitive?
+          (list (binary-inst 'cmp (arg->val arg2)(arg->val arg1))
                 (unary-inst `(set ,op) (reg 'al))
-                ;; TODO: can we use movzbq to move directly from %al to any dest? (stack, %rax, etc.)
                 (binary-inst 'movzb (reg 'al) (var dest)))]
          ['read
           (list (unary-inst 'call "read_int")
@@ -516,7 +515,10 @@
     ['cmp "cmpq"]
     ['movzb "movzbq"]
     [`(set ,op)
-     (string-append "set" (op->cc op))]))
+     (string-append "set" (op->cc op))]
+    [`(jmp-if ,op)
+     (string-append "j" (op->cc op))]
+    ))
 
 (define (arg->asm arg)
   (match arg
