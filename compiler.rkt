@@ -116,7 +116,11 @@
       [(? boolean?) Boolean]
       [(? symbol?) (hash-ref env expr)]
       [`(read) Integer]
-      ;; boolean statement
+      [`(not ,arg)
+       (unless (eq? (typeof arg env) Boolean)
+         (error (string-append "typeof: Invalid argument (expected Boolean) '" (~a arg) "' in expr: " (~a expr))))
+       Boolean]
+      ;; boolean comparison
       [`(,(? boolean-op?) ,args ...)
        (for-each
         (λ (arg)
@@ -239,16 +243,16 @@
                                (append then-stmts (list (assign-stmt then-ans dest-name)))
                                (append otherwise-stmts (list (assign-stmt otherwise-ans dest-name))))
                               (return-stmt dest-name))))]
-      ;; unary negation
-      [`(- ,subexpr)
+      ;; arithmetic negation / binary negation
+      [`(,(? (λ (op) (or (eq? op '-) (eq? op 'not))) op) ,subexpr)
        (match-define (program (list vars ...)  (list stmts ... (return-stmt ans)))
          (flatten-code subexpr vartab))
        (define dest-name (next-tmp-name))
        (program (set-union (list dest-name) vars)
-                (append stmts (list (assign-stmt `(- ,ans) dest-name)
+                (append stmts (list (assign-stmt `(,op ,ans) dest-name)
                                     (return-stmt dest-name))))]
-      ;; binary arithmetic
-      [`(,(? arith-op? op) ,L ,R)
+      ;; binary arithmetic / boolean operators
+      [`(,(? (or/c boolean-op? arith-op?) op) ,L ,R)
        (match-define (program (list L-vars ...) (list L-stmts ... (return-stmt L-ans)))
          (flatten-code L vartab))
        (match-define (program (list R-vars ...) (list R-stmts ... (return-stmt R-ans)))
@@ -257,9 +261,6 @@
        (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
                 (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
                                               (return-stmt dest-name))))]
-      ;; boolean operators
-      [`(,(? boolean-op? op) ,L ,R)
-       (error "boolean operators: coming soon!")]
       )))
 
 
@@ -301,6 +302,9 @@
          [`(,(? arith-op? op) ,arg1 ,arg2)
           (list (binary-inst 'mov (arg->val arg1) (var dest))
                 (binary-inst (arith-name op) (arg->val arg2) (var dest)))]
+         [`(not ,arg)
+          (list (binary-inst 'mov (arg->val arg) (var dest))
+                (binary-inst 'xor (int 1) (var dest)))]
          ['read
           (list (unary-inst 'call "read_int")
                 (binary-inst 'mov (reg 'rax) (var dest)))]
@@ -488,7 +492,8 @@
     ['call "callq"]
     ['ret "ret"]
     ['pop "popq"]
-    ['push "pushq"]))
+    ['push "pushq"]
+    ['xor "xorq"]))
 
 (define (arg->asm arg)
   (match arg
@@ -606,9 +611,12 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-
+#;
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
+
+(define test-expr
+  '(not #f))
 
 
 (compile-and-run test-expr)
