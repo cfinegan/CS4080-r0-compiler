@@ -391,8 +391,8 @@
 (struct xxprogram (stack-size insts) #:transparent)
 
 
-(define alloc-registers #(rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
-                              ; rcx rdx r8 r9 r10 r11 ;; caller-saved (commented out b/c not saving properly)
+(define alloc-registers #(rcx rdx r8 r9 r10 r11 ;; caller-saved
+                              rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
                               ))
 
 ;;;
@@ -634,11 +634,15 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
+(define test-expr
+  '(let ([a (read)] [b (read)])
+     (+ a b)))
+
 #;
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-
+#;
 (define test-expr
   '(>= 3 (+ 1 2)))
 
