@@ -294,20 +294,6 @@
   (define (stmt->insts stmt)
     (match stmt
       [(assign-stmt src-expr (? symbol? dest))
-;       (match src-expr
-;         [(unary-expr op arg)
-;          (list (binary-inst 'mov (arg->val arg) (var dest))
-;                (unary-inst op (var dest)))]
-;         [(binary-expr op arg1 arg2)
-;          (list (binary-inst 'mov (arg->val arg1) (var dest))
-;                (binary-inst op (arg->val arg2) (var dest)))]
-;         ['read
-;          (list (unary-inst 'call "read_int")
-;                (binary-inst 'mov (reg 'rax) (var dest)))]
-;         [(? symbol? arg)
-;          (binary-inst 'mov (var arg) (var dest))]
-;         [(? integer? arg)
-;          (binary-inst 'mov (int arg) (var dest))])
        (match src-expr
          [`(- ,arg)
           (list (binary-inst 'mov (arg->val arg) (var dest))
@@ -411,9 +397,6 @@
 
   (match-define (xprogram vars insts liveness) xprog)
 
-  (print vars)(newline)
-  (print insts)(newline)
-
   (define interference (build-interference xprog))
 
   (define num-valid-registers (vector-length alloc-registers))
@@ -425,8 +408,6 @@
     
   (define-values (num-colors colorings)
     (coloring/greedy interference))
-
-  (display colorings)(newline)
 
   (display "num colors: ") (display num-colors) (newline)
 
@@ -608,7 +589,7 @@
        (let ([y (+ 4 x)] [z (+ x w)])
          (+ z (- y))))))
 
-
+#;
 (define test-expr
   '(let ([x 1] [y 2])
      (+ x y)))
@@ -625,7 +606,7 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-#;
+
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
