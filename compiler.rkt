@@ -245,7 +245,7 @@
          (flatten-code subexpr vartab))
        (define dest-name (next-tmp-name))
        (program (set-union (list dest-name) vars)
-                (append stmts (list (assign-stmt (unary-expr 'neg ans) dest-name)
+                (append stmts (list (assign-stmt `(- ,ans) dest-name)
                                     (return-stmt dest-name))))]
       ;; binary arithmetic
       [`(,(? arith-op? op) ,L ,R)
@@ -255,7 +255,7 @@
          (flatten-code R vartab))
        (define dest-name (next-tmp-name))
        (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
-                (append L-stmts R-stmts (list (assign-stmt (list->expr (list op L-ans R-ans)) dest-name)
+                (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
                                               (return-stmt dest-name))))]
       ;; boolean operators
       [`(,(? boolean-op? op) ,L ,R)
@@ -278,29 +278,50 @@
 ;;;
 ;;; select-insts
 (define (select-insts prog)
-  
+
   (define (arg->val arg)
-    (cond [(integer? arg) (int arg)]
-          [(symbol? arg) (var arg)]
-          [else (error "invalid arg:" arg)]))
+    (match arg
+      [(? integer?) (int arg)]
+      [(? symbol?) (var arg)]
+      [_ (error "invalid arg:" arg)]))
+
+  (define (arith-name op)
+    (match op
+      ['+ 'add]
+      ['- 'sub]
+      [_ (error "invalid arith-op:" op)]))
 
   (define (stmt->insts stmt)
     (match stmt
       [(assign-stmt src-expr (? symbol? dest))
+;       (match src-expr
+;         [(unary-expr op arg)
+;          (list (binary-inst 'mov (arg->val arg) (var dest))
+;                (unary-inst op (var dest)))]
+;         [(binary-expr op arg1 arg2)
+;          (list (binary-inst 'mov (arg->val arg1) (var dest))
+;                (binary-inst op (arg->val arg2) (var dest)))]
+;         ['read
+;          (list (unary-inst 'call "read_int")
+;                (binary-inst 'mov (reg 'rax) (var dest)))]
+;         [(? symbol? arg)
+;          (binary-inst 'mov (var arg) (var dest))]
+;         [(? integer? arg)
+;          (binary-inst 'mov (int arg) (var dest))])
        (match src-expr
-         [(unary-expr op arg)
+         [`(- ,arg)
           (list (binary-inst 'mov (arg->val arg) (var dest))
-                (unary-inst op (var dest)))]
-         [(binary-expr op arg1 arg2)
+                (unary-inst 'neg (var dest)))]
+         [`(,(? arith-op? op) ,arg1 ,arg2)
           (list (binary-inst 'mov (arg->val arg1) (var dest))
-                (binary-inst op (arg->val arg2) (var dest)))]
+                (binary-inst (arith-name op) (arg->val arg2) (var dest)))]
          ['read
           (list (unary-inst 'call "read_int")
                 (binary-inst 'mov (reg 'rax) (var dest)))]
-         [(? symbol? arg)
-          (binary-inst 'mov (var arg) (var dest))]
-         [(? integer? arg)
-          (binary-inst 'mov (int arg) (var dest))])]
+         [(? symbol?)
+          (binary-inst 'mov (var src-expr) (var dest))]
+         [(? integer?)
+          (binary-inst 'mov (var src-expr) (var dest))])]
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
@@ -390,6 +411,9 @@
 
   (match-define (xprogram vars insts liveness) xprog)
 
+  (print vars)(newline)
+  (print insts)(newline)
+
   (define interference (build-interference xprog))
 
   (define num-valid-registers (vector-length alloc-registers))
@@ -402,6 +426,8 @@
   (define-values (num-colors colorings)
     (coloring/greedy interference))
 
+  (display colorings)(newline)
+
   (display "num colors: ") (display num-colors) (newline)
 
   (define spill-count (max 0 (- num-colors num-valid-registers)))
@@ -412,7 +438,8 @@
 
   (define (get-var-home tok)
     (if (var? tok)
-        (color->home (hash-ref colorings (var-name tok)))
+        ;; defaults to zero b/c colorings will be empty in case of no interference.
+        (color->home (hash-ref colorings (var-name tok) 0))
         tok))
 
   (define home-insts
@@ -580,7 +607,8 @@
      (let ([x (+ v 7)])
        (let ([y (+ 4 x)] [z (+ x w)])
          (+ z (- y))))))
-#;
+
+
 (define test-expr
   '(let ([x 1] [y 2])
      (+ x y)))
@@ -597,11 +625,12 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-
+#;
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-#;
+
 (compile-and-run test-expr)
 
+#;
 (flatten-code (uniquify test-expr))
