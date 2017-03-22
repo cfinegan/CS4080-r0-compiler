@@ -77,19 +77,7 @@
         (set! next-id (add1 next-id))
         next-id)))
 
-  (define (unary-op? sym)
-    (eq? sym '-))
-
-  (define (binary-op? sym)
-    (set-member? '(+ -) sym))
-
-  (let uniquify ([expr expr] [symtab #hash()])
-    (define (name? var)
-      (hash-has-key? symtab var))
-    
-    (define (valid-arg? var)
-      (or/c name? integer? list?))
-    
+  (let uniquify ([expr expr] [symtab #hash()])    
     (match expr
       [(? integer?) expr]
       [(? boolean?) expr]
@@ -102,31 +90,17 @@
        `(let ,(map render-var vars) ,(uniquify subexpr next-symtab))]
       [`(if ,cond ,then ,otherwise)
        `(if ,(uniquify cond symtab) ,(uniquify then symtab) ,(uniquify otherwise symtab))]
-      [`(,(? unary-op? op) ,(? valid-arg? arg))
-       `(,op ,(uniquify arg symtab))]
-      [`(,(? binary-op? op) ,(? valid-arg? arg1) ,(? valid-arg? arg2))
-       `(,op ,(uniquify arg1 symtab) ,(uniquify arg2 symtab))]
+      [(? list?)
+       (map (λ (subexpr) (uniquify subexpr symtab)) expr)]
       [_ (error "uniquify - invalid expr:" expr)])))
 
-;; Creates a new return statement.
-(struct return-stmt (arg) #:transparent)
 
-;; Creates a new assignment statement.
-(struct assign-stmt (src dest) #:transparent)
+;; Some basic sets outlining what operators are valid for what purposes.
+(define (arith-op? op)
+  (set-member? '(+ -) op))
 
-;; Creates a new program structure.
-(struct program (vars stmts) #:transparent)
-
-(struct unary-expr (op arg) #:transparent)
-
-(struct binary-expr (op src dest) #:transparent)
-
-(define (list->expr lst)
-  (match lst
-    [`(- ,arg) (unary-expr 'neg arg)]
-    [`(+ ,arg1 ,arg2) (binary-expr 'add arg1 arg2)]
-    [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
-    [_ (error "invalid flattened expression:" lst)]))
+(define (boolean-op? op)
+  (set-member? '(= < > <= >=) op))
 
 ;; Defines types for use in validating program integrity.
 (define Integer 'Integer)
@@ -136,10 +110,6 @@
 ;;; typeof: Returns the type of any well-formed expression.
 ;;;
 (define (typeof expr)
-  (define (bool-op? op)
-    (set-member? '(= < > <= >=) op))
-  (define (int-op? op)
-    (set-member? '(+ -) op))
   (let typeof ([expr expr] [env #hash()])
     (match expr
       [(? integer?) Integer]
@@ -147,7 +117,7 @@
       [(? symbol?) (hash-ref env expr)]
       [`(read) Integer]
       ;; boolean statement
-      [`(,(? bool-op?) ,args ...)
+      [`(,(? boolean-op?) ,args ...)
        (for-each
         (λ (arg)
           (unless (eq? (typeof arg env) Integer)
@@ -155,7 +125,7 @@
         args)
        Boolean]
       ;; arithmetic statement
-      [`(,(? int-op?) ,args ...)
+      [`(,(? arith-op?) ,args ...)
        (for-each
         (λ (arg)
           (unless (eq? (typeof arg env) Integer)
@@ -181,6 +151,30 @@
        (typeof subexpr next-env)]
       [_ (error "typeof: Invalid expr:" expr)])))
 
+
+;; ========
+;; Creates a new return statement.
+(struct return-stmt (arg) #:transparent)
+
+;; Creates a new assignment statement.
+(struct assign-stmt (src dest) #:transparent)
+
+(struct if-stmt (cond then otherwise) #:transparent)
+
+;; Creates a new program structure.
+(struct program (vars stmts) #:transparent)
+
+(struct unary-expr (op arg) #:transparent)
+
+(struct binary-expr (op src dest) #:transparent)
+
+(define (list->expr lst)
+  (match lst
+    [`(- ,arg) (unary-expr 'neg arg)]
+    [`(+ ,arg1 ,arg2) (binary-expr 'add arg1 arg2)]
+    [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
+    [_ (error "invalid flattened expression:" lst)]))
+
 ;;;
 ;;; flatten-code
 ;;; Flattens an expression into a series of statements which only reference integers
@@ -202,7 +196,8 @@
   (let flatten-code ([expr expr] [vartab #hash()])
     (match expr
       [(? integer?) (program empty (list (return-stmt expr)))]
-      [(? boolean?) (program empty (list (return-stmt expr)))]
+      ;; converts #t and #f to integer 1/0.
+      [(? boolean?) (program empty (list (return-stmt (if expr 1 0))))]
       [(? symbol?)
        (define name-ref (hash-ref vartab expr #f))
        (if name-ref
@@ -228,6 +223,22 @@
        (define subexpr-prog (flatten-code subexpr next-vartab))
        (program (set-union (program-vars var-prog) (program-vars subexpr-prog))
                 (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
+      ;; if expression
+      [`(if ,cond ,then ,otherwise)
+       (match-define (program (list cond-vars ...) (list cond-stmts ... (return-stmt cond-ans)))
+         (flatten-code cond vartab))
+       (match-define (program (list then-vars ...) (list then-stmts ... (return-stmt then-ans)))
+         (flatten-code then vartab))
+       (match-define (program (list otherwise-vars ...) (list otherwise-stmts ... (return-stmt otherwise-ans)))
+         (flatten-code otherwise vartab))
+       (define dest-name (next-tmp-name))
+       (program (set-union cond-vars then-vars otherwise-vars (list dest-name))
+                (append cond-stmts
+                        (list (if-stmt
+                               (return-stmt cond-ans) ; note cond is not a list of statements
+                               (append then-stmts (list (assign-stmt then-ans dest-name)))
+                               (append otherwise-stmts (list (assign-stmt otherwise-ans dest-name))))
+                              (return-stmt dest-name))))]
       ;; unary negation
       [`(- ,subexpr)
        (match-define (program (list vars ...)  (list stmts ... (return-stmt ans)))
@@ -237,7 +248,7 @@
                 (append stmts (list (assign-stmt (unary-expr 'neg ans) dest-name)
                                     (return-stmt dest-name))))]
       ;; binary arithmetic
-      [`(,(? (λ (op) (set-member? '(+ -) op)) op) ,L ,R)
+      [`(,(? arith-op? op) ,L ,R)
        (match-define (program (list L-vars ...) (list L-stmts ... (return-stmt L-ans)))
          (flatten-code L vartab))
        (match-define (program (list R-vars ...) (list R-stmts ... (return-stmt R-ans)))
@@ -245,7 +256,11 @@
        (define dest-name (next-tmp-name))
        (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
                 (append L-stmts R-stmts (list (assign-stmt (list->expr (list op L-ans R-ans)) dest-name)
-                                              (return-stmt dest-name))))])))
+                                              (return-stmt dest-name))))]
+      ;; boolean operators
+      [`(,(? boolean-op? op) ,L ,R)
+       (error "boolean operators: coming soon!")]
+      )))
 
 
 (struct int (val) #:transparent)
@@ -584,6 +599,9 @@
 
 
 (define test-expr
-  '(if #t (+ 1 2) 3))
+  '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
+#;
 (compile-and-run test-expr)
+
+(flatten-code (uniquify test-expr))
