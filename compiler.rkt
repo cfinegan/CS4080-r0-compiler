@@ -305,6 +305,11 @@
          [`(not ,arg)
           (list (binary-inst 'mov (arg->val arg) (var dest))
                 (binary-inst 'xor (int 1) (var dest)))]
+         [`(,(? boolean-op? op) ,arg1 ,arg2)
+          (list (binary-inst 'cmp (arg->val arg2)(arg->val arg1)) ;; TODO: crashes, both args can't be primitive?
+                (unary-inst `(set ,op) (reg 'al))
+                ;; TODO: can we use movzbq to move directly from %al to any dest? (stack, %rax, etc.)
+                (binary-inst 'movzb (reg 'al) (var dest)))]
          ['read
           (list (unary-inst 'call "read_int")
                 (binary-inst 'mov (reg 'rax) (var dest)))]
@@ -456,13 +461,19 @@
 
   (define (patch inst)
     (match inst
+      ;; remove trival moves
       [(binary-inst 'mov (? reg? src) (? reg? dest))
        (if (equal? src dest)
            empty
            inst)]
+      ;; memory cannot be deref'd twice in the same instruction
       [(binary-inst op (? deref? src) (? deref? dest))
        (list (binary-inst 'mov src (reg 'rax))
              (binary-inst op (reg 'rax) dest))]
+      ;; cmp instruction can't have literals as both args
+      [(binary-inst 'cmp arg1 (? int? arg2))
+       (list (binary-inst 'mov arg2 (reg 'rax))
+             (binary-inst 'cmp arg1 (reg 'rax)))]
       [_ inst]))
 
   (xxprogram stack-size (flatten (map patch insts))))
@@ -481,6 +492,14 @@
 (define (int->asm n)
   (string-append "$" (number->string n)))
 
+(define (op->cc op)
+  (match op
+    ['= "e"]
+    ['< "l"]
+    ['<= "le"]
+    ['> "g"]
+    ['>= "ge"]))
+
 (define (op->asm op)
   (match op
     ['neg "negq"]
@@ -493,7 +512,11 @@
     ['ret "ret"]
     ['pop "popq"]
     ['push "pushq"]
-    ['xor "xorq"]))
+    ['xor "xorq"]
+    ['cmp "cmpq"]
+    ['movzb "movzbq"]
+    [`(set ,op)
+     (string-append "set" (op->cc op))]))
 
 (define (arg->asm arg)
   (match arg
@@ -615,11 +638,9 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
+
 (define test-expr
-  '(not #f))
+  '(>= 3 (+ 1 2)))
 
 
 (compile-and-run test-expr)
-
-#;
-(flatten-code (uniquify test-expr))
