@@ -172,13 +172,6 @@
 
 (struct binary-expr (op src dest) #:transparent)
 
-(define (list->expr lst)
-  (match lst
-    [`(- ,arg) (unary-expr 'neg arg)]
-    [`(+ ,arg1 ,arg2) (binary-expr 'add arg1 arg2)]
-    [`(- ,arg1 ,arg2) (binary-expr 'sub arg1 arg2)]
-    [_ (error "invalid flattened expression:" lst)]))
-
 ;;;
 ;;; flatten-code
 ;;; Flattens an expression into a series of statements which only reference integers
@@ -330,6 +323,7 @@
   (match-define (xprogram vars insts _) xprog)
   
   (define (reads-dest? op)
+    ;; TODO: Does this need to include movbz? How to be sure %rax and %al are considered same reg?
     (not (eq? op 'mov)))
   
   (define drop1 rest)
@@ -469,7 +463,7 @@
       [(binary-inst op (? deref? src) (? deref? dest))
        (list (binary-inst 'mov src (reg 'rax))
              (binary-inst op (reg 'rax) dest))]
-      ;; cmp instruction can't have literals as both args
+      ;; cmp instruction can't have literals as second arg
       [(binary-inst 'cmp arg1 (? int? arg2))
        (list (binary-inst 'mov arg2 (reg 'rax))
              (binary-inst 'cmp arg1 (reg 'rax)))]
@@ -514,10 +508,10 @@
     ['xor "xorq"]
     ['cmp "cmpq"]
     ['movzb "movzbq"]
-    [`(set ,op)
-     (string-append "set" (op->cc op))]
-    [`(jmp-if ,op)
-     (string-append "j" (op->cc op))]
+    [`(set ,bool-op)
+     (string-append "set" (op->cc bool-op))]
+    [`(jmp-if ,bool-op)
+     (string-append "j" (op->cc bool-op))]
     ))
 
 (define (arg->asm arg)
@@ -636,6 +630,7 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
+
 (define test-expr
   '(let ([a (read)] [b (read)])
      (+ a b)))
@@ -646,7 +641,7 @@
 
 #;
 (define test-expr
-  '(>= 3 (+ 1 2)))
+  '(= 3 (- 4 1)))
 
 
 (compile-and-run test-expr)
