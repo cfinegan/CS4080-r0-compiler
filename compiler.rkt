@@ -383,9 +383,8 @@
 (struct deref (reg amount) #:transparent)
 (struct xxprogram (stack-size insts) #:transparent)
 
-
-(define alloc-registers #(rcx rdx r8 r9 r10 r11 ;; caller-saved
-                              rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
+(define alloc-registers #(rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
+                              rcx rdx r8 r9 r10 r11 ;; caller-saved
                               ))
 
 ;;;
@@ -393,10 +392,8 @@
 ;;;
 (define (assign-homes xprog)
 
-  ;; TODO: Verify that *not* using rbp[0] is correct.
-  ;;       Figure out why saving caller-saved registers before a function call crashes the program.
-  ;;       Remove diagnostic prints.
-
+  ;; TODO: diagnostic prints: keep or remove?
+  
   (match-define (xprogram vars insts liveness) xprog)
 
   (define interference (build-interference xprog))
@@ -435,7 +432,11 @@
            [(unary-inst 'call func)
             (define lives (set-intersect (map get-var-home l-afters) (map reg caller-saved)))
             (append (map (λ (var) (unary-inst 'push var)) lives)
-                    (list inst)
+                    (if (odd? (length lives))
+                        (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
+                              inst
+                              (binary-inst 'add (int ptr-size) (reg 'rsp)))
+                        (list inst))
                     (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
            [(unary-inst op arg)
             (unary-inst op (get-var-home arg))]
@@ -630,7 +631,7 @@
   '(let ([a (read)] [b (read)] [c (read)] [d (read)])
      (+ a (+ b (+ c d)))))
 
-
+#;
 (define test-expr
   '(let ([a (read)] [b (read)])
      (+ a b)))
@@ -639,7 +640,7 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-#;
+
 (define test-expr
   '(= 3 (- 4 1)))
 
