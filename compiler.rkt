@@ -114,7 +114,8 @@
     (match expr
       [(? integer?) Integer]
       [(? boolean?) Boolean]
-      [(? symbol?) (hash-ref env expr)]
+      ;; crash if symbol doesn't exist in environment.
+      [(? symbol?) (hash-ref env expr)] 
       [`(read) Integer]
       [`(not ,arg)
        (unless (eq? (typeof arg env) Boolean)
@@ -267,11 +268,21 @@
 
 (struct binary-inst (op src dest) #:transparent)
 
+(struct if-inst (cond else otherwise) #:transparent)
+
+(struct label (name) #:transparent)
+
 (struct xprogram (vars insts live-afters) #:transparent)
 
 ;;;
 ;;; select-insts
 (define (select-insts prog)
+
+  (define get-next-label
+    (let ([next-label -1])
+      (λ ()
+        (set! next-label (add1 next-label))
+        (string-append "r0L" (number->string next-label)))))
 
   (define (arg->val arg)
     (match arg
@@ -309,6 +320,25 @@
           (binary-inst 'mov (var src-expr) (var dest))]
          [(? integer?)
           (binary-inst 'mov (var src-expr) (var dest))])]
+      [(if-stmt (return-stmt cond-ans) then-stmts otherwise-stmts)
+       (if-inst
+        ; note: cond is just a value which will be compared with #t when the if-stmt is lowered
+        cond-ans
+        ; then
+        (flatten (map stmt->insts then-stmts))
+        ; otherwise
+        (flatten (map stmt->insts otherwise-stmts)))]
+      #;[(if-stmt (return-stmt cond-ans) then-stmts otherwise-stmts)
+       (define then-label (get-next-label))
+       (define end-label (get-next-label))
+       (append
+        (list (binary-inst 'cmp (int 1) cond-ans)
+              (unary-inst '(jmp-if =) then-label))
+        otherwise-stmts
+        (list (unary-inst 'jmp end-label)
+              (label then-label))
+        then-stmts
+        (list (label end-label)))]
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
@@ -339,7 +369,9 @@
           [(binary-inst op src dest)
            (if (reads-dest? op)
                (set-union (first out) (list src dest))
-               (set-union (set-remove (first out) dest) (list src)))]))
+               (set-union (set-remove (first out) dest) (list src)))]
+          [(if-inst cond-var then-stmts otherwise-stmts)
+           (error "if liveness: coming soon!")]))
        out)))
   (xprogram vars insts liveness))
 
@@ -509,6 +541,7 @@
     ['xor "xorq"]
     ['cmp "cmpq"]
     ['movzb "movzbq"]
+    ['jmp "jmpq"]
     [`(set ,bool-op)
      (string-append "set" (op->cc bool-op))]
     [`(jmp-if ,bool-op)
@@ -636,13 +669,15 @@
   '(let ([a (read)] [b (read)])
      (+ a b)))
 
-#;
+
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-
+#;
 (define test-expr
   '(= 3 (- 4 1)))
 
+#;
+(select-insts (flatten-code (uniquify test-expr)))
 
 (compile-and-run test-expr)
