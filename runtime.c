@@ -1,9 +1,16 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 
-int read_int() {
-    int result, n;
-    result = scanf("%d", &n);
+#define STR_TRUE "#t"
+#define STR_FALSE "#f"
+
+typedef int64_t int64;
+
+int64 read_int() {
+    int64 n;
+    int result;
+    result = scanf("%ld", &n);
     if (result == -1) {
         perror("scanf failed");
         exit(EXIT_FAILURE);
@@ -15,9 +22,16 @@ int read_int() {
     return n;
 }
 
-void write_int(int n) {
-    if (printf("%d\n", n) == -1) {
+void write_int(int64 n) {
+    if (printf("%ld\n", n) == -1) {
         perror("write_int failed");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void write_bool(int64 n) {
+    if (printf("%s\n", (n ? STR_TRUE : STR_FALSE)) == -1) {
+        perror("write_bool failed");
         exit(EXIT_FAILURE);
     }
 }

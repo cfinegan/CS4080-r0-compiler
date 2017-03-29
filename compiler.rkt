@@ -106,6 +106,73 @@
 (define Integer 'Integer)
 (define Boolean 'Boolean)
 
+;(struct ht (type val) #:transparent)
+;
+;(struct typed-expr (type env expr) #:transparent)
+;
+;
+;(define (typeof- expr)
+;
+;  (define (fmt-type-error arg expected-type expr)
+;    (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
+;            arg expected-type expr))
+;  
+;  (let typeof ([expr expr] [env #hash()])
+;    (match expr
+;      [(? integer?)
+;       (ht Integer expr)]
+;      [(? boolean?)
+;       (ht Boolean expr)]
+;      [(? symbol?)
+;       ; crash if symbol doesn't exist in environment.
+;       (ht (hash-ref env expr) expr)]
+;      [`(read)
+;       (ht Integer expr)]
+;      [`(not ,arg)
+;       (define arg-t (typeof arg env))
+;       (unless (eq? Boolean (ht-type arg-t))
+;         (error (fmt-type-error arg Boolean expr)))
+;       arg-t]
+;      ; boolean comparison
+;      [`(,(? boolean-op? op) ,args ...)
+;       (define args-t
+;         (map
+;          (λ (arg)
+;            (define arg-t (typeof arg env))
+;            (unless (eq? Integer (ht-type arg-t))
+;              (error (fmt-type-error arg Integer expr)))
+;            arg-t)
+;          args))
+;       (ht Boolean (cons op args-t))]
+;      ; arithmetic expression
+;      [`(,(? arith-op? op) ,args ...)
+;       (define args-t
+;         (map
+;          (λ (arg)
+;            (define arg-t (typeof arg env))
+;            (unless (eq? Integer (ht-type arg-t))
+;              (error (fmt-type-error arg Integer expr)))
+;            arg-t)
+;          args))
+;       (ht Integer (cons op args-t))]
+;      ; if expression
+;      [`(if ,cond ,then ,otherwise)
+;       (define cond-t (typeof cond env))
+;       (unless (eq? Boolean (ht-type cond-t))
+;         (error (fmt-type-error cond Boolean expr)))
+;       (define then-t (typeof then env))
+;       (define otherwise-t (typeof otherwise env))
+;       (unless (eq? (ht-type then-t) (ht-type otherwise-t))
+;         (error (format "'~a' and '~a' mismatch types in expr: ~a"
+;                        then otherwise expr)))
+;       (ht (ht-type then-t) `(if ,cond-t then-t otherwise-t))]
+;      ; let statement
+;      [`(let (,(? let-var? vars) ...) ,subexpr)
+;       (error "let: coming soon!")]
+;      [_ (error "typeof: Invalid expr:" expr)])))
+       
+
+
 ;;;
 ;;; typeof: Returns the type of any well-formed expression.
 ;;;
@@ -254,8 +321,7 @@
        (define dest-name (next-tmp-name))
        (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
                 (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
-                                              (return-stmt dest-name))))]
-      )))
+                                              (return-stmt dest-name))))])))
 
 
 (struct int (val) #:transparent)
@@ -268,7 +334,7 @@
 
 (struct binary-inst (op src dest) #:transparent)
 
-(struct if-inst (cond else otherwise) #:transparent)
+(struct if-inst (cond then thn-lives otherwise ow-lives) #:transparent)
 
 (struct label (name) #:transparent)
 
@@ -310,9 +376,8 @@
           (list (binary-inst 'mov (arg->val arg) (var dest))
                 (binary-inst 'xor (int 1) (var dest)))]
          [`(,(? boolean-op? op) ,arg1 ,arg2)
-          (list (binary-inst 'cmp (arg->val arg2)(arg->val arg1))
-                (unary-inst `(set ,op) (reg 'al))
-                (binary-inst 'movzb (reg 'al) (var dest)))]
+          (list (binary-inst 'cmp (arg->val arg2) (arg->val arg1))
+                (unary-inst `(set ,op) (var dest)))]
          ['read
           (list (unary-inst 'call "read_int")
                 (binary-inst 'mov (reg 'rax) (var dest)))]
@@ -321,29 +386,20 @@
          [(? integer?)
           (binary-inst 'mov (var src-expr) (var dest))])]
       [(if-stmt (return-stmt cond-ans) then-stmts otherwise-stmts)
-       (if-inst
+       (if-stmt
         ; note: cond is just a value which will be compared with #t when the if-stmt is lowered
         cond-ans
         ; then
         (flatten (map stmt->insts then-stmts))
         ; otherwise
         (flatten (map stmt->insts otherwise-stmts)))]
-      #;[(if-stmt (return-stmt cond-ans) then-stmts otherwise-stmts)
-       (define then-label (get-next-label))
-       (define end-label (get-next-label))
-       (append
-        (list (binary-inst 'cmp (int 1) cond-ans)
-              (unary-inst '(jmp-if =) then-label))
-        otherwise-stmts
-        (list (unary-inst 'jmp end-label)
-              (label then-label))
-        then-stmts
-        (list (label end-label)))]
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
   (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog))) empty))
 
+
+(struct hl (lafters val) #:transparent)
 
 ;;;
 ;;; uncover-live
@@ -353,27 +409,37 @@
   (match-define (xprogram vars insts _) xprog)
   
   (define (reads-dest? op)
-    ;; TODO: Does this need to include movbz? How to be sure %rax and %al are considered same reg?
-    (not (eq? op 'mov)))
+    ;; TODO: Does this need to include movbz?
+    ;;       How to be sure %rax and %al are considered same reg?
+    (if (list? op)
+        (not (eq? (first op) 'set))
+        (not (set-member? '(mov movzb) op))))
+
+  (define (reads-dest?- op)
+    (set-member? '(add sub xor cmp) op))
   
   (define drop1 rest)
   
-  (define liveness
-    (for/fold ([out (list empty)]) ([inst (reverse (drop1 insts))])
-      (cons
-       (filter
-        var?
-        (match inst
-          [(unary-inst op arg)
-           (set-union (first out) (list arg))]
-          [(binary-inst op src dest)
-           (if (reads-dest? op)
-               (set-union (first out) (list src dest))
-               (set-union (set-remove (first out) dest) (list src)))]
-          [(if-inst cond-var then-stmts otherwise-stmts)
-           (error "if liveness: coming soon!")]))
-       out)))
-  (xprogram vars insts liveness))
+  (define (liveness insts)
+    (let liveness ([insts insts] [out (list empty)])
+      (for/fold ([out (list empty)]) ([inst (reverse (drop1 insts))])
+        (cons
+         (filter
+          var?
+          (match inst
+            [(unary-inst op arg)
+             (set-union (first out) (list arg))]
+            [(binary-inst op src dest)
+             (if (reads-dest? op)
+                 (set-union (first out) (list src dest))
+                 (set-union (set-remove (first out) dest) (list src)))]
+            [(if-stmt cond-var then-insts otherwise-insts)
+             (set-add (set-union (liveness then-insts out)
+                                 (liveness otherwise-insts out))
+                      cond-var)]))
+         out))))
+  
+  (xprogram vars insts (liveness insts)))
 
 
 ;;;
@@ -487,7 +553,7 @@
 
   (define (patch inst)
     (match inst
-      ;; remove trival moves
+      ;; remove trivial moves
       [(binary-inst 'mov (? reg? src) (? reg? dest))
        (if (equal? src dest)
            empty
@@ -500,6 +566,10 @@
       [(binary-inst 'cmp arg1 (? int? arg2))
        (list (binary-inst 'mov arg2 (reg 'rax))
              (binary-inst 'cmp arg1 (reg 'rax)))]
+      ;; set instruction can only reference 8-bit registers
+      [(unary-inst `(set ,op) dest)
+       (list (unary-inst `(set ,op) (reg 'al))
+             (binary-inst 'movzb (reg 'al) dest))]
       [_ inst]))
 
   (xxprogram stack-size (flatten (map patch insts))))
@@ -669,7 +739,7 @@
   '(let ([a (read)] [b (read)])
      (+ a b)))
 
-
+#;
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
@@ -677,7 +747,15 @@
 (define test-expr
   '(= 3 (- 4 1)))
 
-#;
-(select-insts (flatten-code (uniquify test-expr)))
+
+(define test-expr
+  '(let ([x (+ 2 3)] [y (- 5)] [a 55])
+     (let ([x (- x y)] [z (+ x y)])
+       (let ([w (if (< x z) (+ 5 z) (- x y))])
+         (+ w (- x (+ a 2)))))))
+
+
+(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+
 
 (compile-and-run test-expr)
