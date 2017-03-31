@@ -4,6 +4,8 @@
 
 (define (replace-syntax expr)
   (define r replace-syntax)
+  (define (var-args-op? op)
+    (set-member? '(+ - * or and) op))
   (match expr
     ; not
     [`(not ,arg)
@@ -16,39 +18,17 @@
     [`(and ,arg1 ,arg2)
      `(if ,(r arg1) ,(r arg2) #f)]
     ; Breaks var-args into 'pyramid' of calls
-    [`(,(? (λ (op) (set-member? '(+ - * or and) op)) op) ,arg1 ,args ..2)
+    [`(,(? var-args-op? op) ,arg1 ,args ..2)
      `(,op ,(r arg1) ,(r (cons op args)))]
     ; Recursively call self on nested calls.
-    [`(,proc ,args ...)
-     (cons proc (map r args))]
+    [(? list?)
+     (map r expr)]
     ; Default
     [_ expr]))
-
-(define (optimize expr)
-  (define opt optimize)
-  (match expr
-    ; Special cases for arithmetic
-    [`(+ ,val 0) (opt val)]
-    [`(+ 0 ,val) (opt val)]
-    [`(- ,val 0) (opt val)]
-    [`(- 0, val) `(- ,(opt val))]
-    [`(- ,(? integer? n)) (- n)]
-    [`(* ,val 1) (opt val)]
-    [`(* 1 ,val) (opt val)]
-    [`(* ,val 0) 0]
-    [`(* 0 ,val) 0]
-    [`(/ ,val 1) (opt val)]
-    ; Special cases for boolean logic
-    [`(not ,(? boolean? b)) (not b)]
-    ; Recursively call self on nested calls.
-    [(? list?) (map opt expr)]
-    ; Default
-    [_ expr]))
-
 
 ;; Returns true if argument is a list in the form expected by the let macro.
 (define (let-var? v)
-  (and (list? v) (= 2 (length v)) (symbol? (first v))))
+  (and (list? v) (= 2 (length v))))
 
 ;;;
 ;;; uniquify
@@ -398,48 +378,83 @@
   
   (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog))) empty))
 
-
-(struct hl (lafters val) #:transparent)
+;(struct inst-lst (insts l-afters) #:transparent)
+;
+;(struct il (insts afters) #:transparent)
+;
+;(struct if-afters (if then ow) #:transparent)
+;
+;(struct ha (inst l-after) #:transparent)
 
 ;;;
 ;;; uncover-live
 ;;;
 (define (uncover-live xprog)
-  
-  (match-define (xprogram vars insts _) xprog)
-  
-  (define (reads-dest? op)
-    ;; TODO: Does this need to include movbz?
-    ;;       How to be sure %rax and %al are considered same reg?
-    (if (list? op)
-        (not (eq? (first op) 'set))
-        (not (set-member? '(mov movzb) op))))
+  (match-define (xprogram vars all-insts emtpy) xprog)
 
-  (define (reads-dest?- op)
-    (set-member? '(add sub xor cmp) op))
+  (define (move-inst? op)
+    (set-member? '(mov movzb) op))
   
-  (define drop1 rest)
+  (define (get-vars inst)
+    (filter
+     var?
+     (match inst
+      [(unary-inst op arg)
+       (list arg)]
+      [(binary-inst op arg1 arg2)
+       (list arg1 arg2)])))
+
+  (define (get-reads inst)
+    (filter
+     var?
+     (match inst
+       ; set doesn't read from arg
+       [(unary-inst `(set _) arg)
+        empty]
+       ; pop doesn't read from arg
+       [(unary-inst 'pop arg)
+        empty]
+       ; all other unary insts are assumed to read
+       [(unary-inst op arg)
+        (list arg)]
+       ; move insts don't read arg2
+       [(binary-inst (? move-inst?) arg1 arg2)
+        (list arg1)]
+       ; all other binary insts are assumed to read both args
+       [(binary-inst op arg1 arg2)
+        (list arg1 arg2)])))
   
-  (define (liveness insts)
-    (let liveness ([insts insts] [out (list empty)])
-      (for/fold ([out (list empty)]) ([inst (reverse (drop1 insts))])
-        (cons
-         (filter
-          var?
-          (match inst
-            [(unary-inst op arg)
-             (set-union (first out) (list arg))]
-            [(binary-inst op src dest)
-             (if (reads-dest? op)
-                 (set-union (first out) (list src dest))
-                 (set-union (set-remove (first out) dest) (list src)))]
-            [(if-stmt cond-var then-insts otherwise-insts)
-             (set-add (set-union (liveness then-insts out)
-                                 (liveness otherwise-insts out))
-                      cond-var)]))
-         out))))
-  
-  (xprogram vars insts (liveness insts)))
+  (define (get-writes inst)
+    (filter
+     var?
+     (match inst
+       ; push doesn't write to arg
+       [(unary-inst 'push arg)
+        empty]
+       ; all other unary insts are assumed to write
+       [(unary-inst op arg)
+        (list arg)]
+       ; cmp doesn't write to either arg
+       [(binary-inst 'cmp arg1 arg2)
+        empty]
+       ; all other binary insts are assumed to write to arg2
+       [(binary-inst op arg1 arg2)
+        (list arg2)])))
+
+  (define-values (insts l-afters)
+    (for/fold ([insts empty]
+               [l-afters (list empty)])
+              ([inst (reverse (rest all-insts))])
+      (define l-after (first l-afters))
+      (define l-before
+        (set-union (set-subtract l-after (get-writes inst))
+                   (get-reads inst)))
+      (values
+       (cons inst insts)
+       (cons l-before l-afters))))
+
+  ;; add first inst back to insts before returning
+  (xprogram vars (cons (first all-insts) insts) l-afters))
 
 
 ;;;
@@ -453,8 +468,13 @@
 
   (match-define (xprogram vars insts live-afters) xprog)
 
-  (unless (= (length insts) (length live-afters))
-    (error "insts and live-afters must have the same length"))
+  (let ([insts-len (length insts)]
+        [la-len (length live-afters)])
+    (unless (= insts-len la-len)
+      (error
+       (format
+        "insts (size: ~a) and live-afters (size: ~a) must have same length"
+        insts-len la-len))))
 
   (define graph (unweighted-graph/undirected empty))
   
@@ -539,7 +559,11 @@
            [(unary-inst op arg)
             (unary-inst op (get-var-home arg))]
            [(binary-inst op src dest)
-            (binary-inst op (get-var-home src) (get-var-home dest))])
+            (binary-inst op (get-var-home src) (get-var-home dest))]
+           [(if-stmt cond-var then ow)
+            (display (third l-afters))
+            (error "coming soon!")]
+           )
          out)))))
 
   (xxprogram stack-size home-insts))
@@ -605,7 +629,7 @@
     ['mul "imulq"]
     ['div "idivq"]
     ['call "callq"]
-    ['ret "ret"]
+    #;['ret "ret"] ; TODO: is this even right?
     ['pop "popq"]
     ['push "pushq"]
     ['xor "xorq"]
@@ -739,7 +763,7 @@
   '(let ([a (read)] [b (read)])
      (+ a b)))
 
-#;
+
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
@@ -747,7 +771,7 @@
 (define test-expr
   '(= 3 (- 4 1)))
 
-
+#;
 (define test-expr
   '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
