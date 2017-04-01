@@ -494,22 +494,30 @@
         insts-len la-len))))
 
   (define graph (unweighted-graph/undirected empty))
-  
-  (for ([inst insts] [l-after live-afters])
-    (match inst
-      [(binary-inst 'mov src (? var? dest))
-       (for ([var l-after])
-         (unless (or (equal? var dest) (equal? var src))
-           (add-edge! graph (var-name dest) (var-name var))))]
-      [(binary-inst op src (? var? dest))
-       (for ([var l-after])
-         (unless (equal? var dest)
-           (add-edge! graph (var-name var) (var-name dest))))]
-      [(unary-inst 'call (? string? label))
-       (for ([var l-after])
-         (for ([reg caller-saved])
-           (add-edge! graph reg (var-name var))))]
-      [_ void]))
+
+  (let build-inter ([insts insts]
+                    [live-afters live-afters])
+    (for ([inst insts]
+          [l-after live-afters])
+      (match inst
+        [(binary-inst 'mov src (? var? dest))
+         (for ([var l-after])
+           (unless (or (equal? var dest) (equal? var src))
+             (add-edge! graph (var-name dest) (var-name var))))]
+        [(binary-inst op src (? var? dest))
+         (for ([var l-after])
+           (unless (equal? var dest)
+             (add-edge! graph (var-name var) (var-name dest))))]
+        [(unary-inst 'call (? string? label))
+         (for ([var l-after])
+           (for ([reg caller-saved])
+             (add-edge! graph reg (var-name var))))]
+        [(if-stmt/lives cond then then-lives ow ow-lives)
+         (begin
+           (build-inter then then-lives)
+           (build-inter ow ow-lives)
+           void)]
+        [_ void])))
 
   graph)
 
@@ -529,7 +537,7 @@
 
   ;; TODO: diagnostic prints: keep or remove?
   
-  (match-define (xprogram vars insts liveness) xprog)
+  (match-define (xprogram vars insts l-afters) xprog)
 
   (define interference (build-interference xprog))
 
@@ -558,14 +566,16 @@
         tok))
 
   (define home-insts
+    (let assign-homes ([insts insts]
+                       [l-afters l-afters])
     (flatten
      (reverse
       (for/fold ([out empty])
-                ([inst insts] [l-afters liveness])
+                ([inst insts] [l-after l-afters])
         (cons
          (match inst
            [(unary-inst 'call func)
-            (define lives (set-intersect (map get-var-home l-afters) (map reg caller-saved)))
+            (define lives (set-intersect (map get-var-home l-after) (map reg caller-saved)))
             (append (map (λ (var) (unary-inst 'push var)) lives)
                     (if (odd? (length lives))
                         (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
@@ -577,11 +587,10 @@
             (unary-inst op (get-var-home arg))]
            [(binary-inst op src dest)
             (binary-inst op (get-var-home src) (get-var-home dest))]
-           [(if-stmt cond-var then ow)
-            (display (third l-afters))
-            (error "coming soon!")]
+           [(if-stmt/lives cond then then-afters ow ow-afters)
+            (if-stmt cond (assign-homes then then-afters) (assign-homes ow ow-afters))]
            )
-         out)))))
+         out))))))
 
   (xxprogram stack-size home-insts))
 
@@ -788,7 +797,7 @@
 (define test-expr
   '(= 3 (- 4 1)))
 
-
+#;
 (define test-expr
   '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
@@ -796,7 +805,11 @@
          (+ w (- x (+ a 2)))))))
 
 
-(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+(define test-expr
+  '(if (= 1 2) (+ 1 2) (- 3 2)))
+
+
+(assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr)))))
 
 
 (compile-and-run test-expr)
