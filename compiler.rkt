@@ -378,23 +378,19 @@
   
   (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog))) empty))
 
-;(struct inst-lst (insts l-afters) #:transparent)
-;
-;(struct il (insts afters) #:transparent)
-;
-;(struct if-afters (if then ow) #:transparent)
-;
-;(struct ha (inst l-after) #:transparent)
 
 ;;;
 ;;; uncover-live
 ;;;
+(struct if-stmt/lives (cond then then-lives ow ow-lives) #:transparent)
+
 (define (uncover-live xprog)
   (match-define (xprogram vars all-insts emtpy) xprog)
 
   (define (move-inst? op)
     (set-member? '(mov movzb) op))
-  
+
+  #; ; TODO: Do we actually need this? right now it's never called, book recommends it.
   (define (get-vars inst)
     (filter
      var?
@@ -441,18 +437,39 @@
        [(binary-inst op arg1 arg2)
         (list arg2)])))
 
-  (define-values (insts l-afters)
-    (for/fold ([insts empty]
-               [l-afters (list empty)])
-              ([inst (reverse (rest all-insts))])
-      (define l-after (first l-afters))
-      (define l-before
-        (set-union (set-subtract l-after (get-writes inst))
-                   (get-reads inst)))
-      (values
-       (cons inst insts)
-       (cons l-before l-afters))))
+  (define drop1 rest)
 
+  (define-values (insts l-afters)
+    (let get-lives ([in-insts all-insts]
+                    [in-l-afters (list empty)])
+      (for/fold ([insts empty]
+                 [l-afters in-l-afters])
+                ([inst (reverse (drop1 in-insts))])
+        (define l-after (first l-afters))
+
+        (define-values (out-inst l-before)
+          (match inst
+            [(if-stmt cond then ow)
+             (define cond-var (var cond)) ; TODO: literals will probably break this!
+             (define-values (then-insts then-afters)
+               (get-lives then (list l-after)))
+             (define-values (ow-insts ow-afters)
+               (get-lives ow (list l-after)))
+             (values
+              (if-stmt/lives cond-var
+                             (cons (first then) then-insts) then-afters
+                             (cons (first ow) ow-insts) ow-afters)
+              (set-union (first then-afters) (first ow-afters) (list cond-var)))]
+            [_
+             (values
+              inst
+              (set-union (set-subtract l-after (get-writes inst))
+                         (get-reads inst)))]))
+                
+        (values
+         (cons out-inst insts)
+         (cons l-before l-afters)))))
+  
   ;; add first inst back to insts before returning
   (xprogram vars (cons (first all-insts) insts) l-afters))
 
@@ -763,7 +780,7 @@
   '(let ([a (read)] [b (read)])
      (+ a b)))
 
-
+#;
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
@@ -771,11 +788,11 @@
 (define test-expr
   '(= 3 (- 4 1)))
 
-#;
+
 (define test-expr
   '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
-       (let ([w (if (< x z) (+ 5 z) (- x y))])
+       (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
 
