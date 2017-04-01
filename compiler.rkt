@@ -316,19 +316,11 @@
 
 (struct if-inst (cond then thn-lives otherwise ow-lives) #:transparent)
 
-(struct label (name) #:transparent)
-
 (struct xprogram (vars insts live-afters) #:transparent)
 
 ;;;
 ;;; select-insts
 (define (select-insts prog)
-
-  (define get-next-label
-    (let ([next-label -1])
-      (λ ()
-        (set! next-label (add1 next-label))
-        (string-append "r0L" (number->string next-label)))))
 
   (define (arg->val arg)
     (match arg
@@ -559,6 +551,14 @@
   (display "spill count: ") (display spill-count) (newline)
   (display "stack size: ") (display stack-size) (newline)
 
+  ; print info about which var goes to what home
+  (newline)
+  (hash-for-each
+   colorings
+   (λ (key val)
+     (display (format "~a => ~a" key (color->home val)))(newline)))
+  (newline)
+
   (define (get-var-home tok)
     (if (var? tok)
         ;; defaults to zero b/c colorings will be empty in case of no interference.
@@ -588,11 +588,43 @@
            [(binary-inst op src dest)
             (binary-inst op (get-var-home src) (get-var-home dest))]
            [(if-stmt/lives cond then then-afters ow ow-afters)
-            (if-stmt cond (assign-homes then then-afters) (assign-homes ow ow-afters))]
+            (if-stmt (get-var-home cond) (assign-homes then then-afters) (assign-homes ow ow-afters))]
            )
          out))))))
 
   (xxprogram stack-size home-insts))
+
+
+;;;
+;;; lower-conds
+;;;
+(struct label (name) #:transparent)
+
+(define (lower-conds xxprog)
+  (match-define (xxprogram stack-size insts) xxprog)
+
+  (define next-label
+    (let ([next-id -1])
+      (λ ()
+        (set! next-id (add1 next-id))
+        (format "r0L~a" next-id))))
+
+  (define (lower-cond inst)
+    (match inst
+      [(if-stmt cond then-insts ow-insts)
+       (define then-label (next-label))
+       (define end-label (next-label))
+       (list
+        (binary-inst 'cmp (int 1) cond)
+        (unary-inst `(jmp-if =) then-label)
+        (map lower-cond ow-insts)
+        (unary-inst 'jmp end-label)
+        (label then-label)
+        (map lower-cond then-insts)
+        (label end-label))]
+      [_ inst]))
+
+  (xxprogram stack-size (flatten (map lower-cond insts))))
 
 ;;;
 ;;; patch-insts
@@ -647,26 +679,30 @@
     ['>= "ge"]))
 
 (define (op->asm op)
-  (match op
-    ['neg "negq"]
-    ['mov "movq"]
-    ['add "addq"]
-    ['sub "subq"]
-    ['mul "imulq"]
-    ['div "idivq"]
-    ['call "callq"]
-    #;['ret "ret"] ; TODO: is this even right?
-    ['pop "popq"]
-    ['push "pushq"]
-    ['xor "xorq"]
-    ['cmp "cmpq"]
-    ['movzb "movzbq"]
-    ['jmp "jmpq"]
-    [`(set ,bool-op)
-     (string-append "set" (op->cc bool-op))]
-    [`(jmp-if ,bool-op)
-     (string-append "j" (op->cc bool-op))]
-    ))
+  (define op-str
+    (match op
+      ['neg "negq"]
+      ['mov "movq"]
+      ['add "addq"]
+      ['sub "subq"]
+      ['mul "imulq"]
+      ['div "idivq"]
+      ['call "callq"]
+      #;['ret "ret"] ; TODO: is this even right?
+      ['pop "popq"]
+      ['push "pushq"]
+      ['xor "xorq"]
+      ['cmp "cmpq"]
+      ['movzb "movzbq"]
+      ['jmp "jmp"]
+      [`(set ,bool-op)
+       (string-append "set" (op->cc bool-op))]
+      [`(jmp-if ,bool-op)
+       (string-append "j" (op->cc bool-op))]))
+  ; adds extra tab if the op name is too short
+  (if (< (string-length op-str) 4)
+      (string-append op-str "\t")
+      op-str))
 
 (define (arg->asm arg)
   (match arg
@@ -677,8 +713,12 @@
 
 (define (inst->asm inst)
   (match inst
-    [(unary-inst op arg) (fmt-asm (op->asm op) (arg->asm arg))]
-    [(binary-inst op src dest) (fmt-asm (op->asm op) (arg->asm src) (arg->asm dest))]))
+    [(unary-inst op arg)
+     (fmt-asm (op->asm op) (arg->asm arg))]
+    [(binary-inst op src dest)
+     (fmt-asm (op->asm op) (arg->asm src) (arg->asm dest))]
+    [(label name)
+     (format "~a:\n" name)]))
 
 (define (print-asm xxprog)
   (define stack-size (xxprogram-stack-size xxprog))
@@ -707,7 +747,7 @@
 (define (expr->asm expr)
 
   (define steps (list uniquify flatten-code select-insts uncover-live
-                      assign-homes patch-insts print-asm))
+                      assign-homes lower-conds patch-insts print-asm))
 
   (for/fold ([prog expr])
             ([step steps])
@@ -804,12 +844,24 @@
        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
+#;
+(define test-expr
+  '(if (<= 1 2) (+ 1 2) (- 3 2)))
+
 
 (define test-expr
-  '(if (= 1 2) (+ 1 2) (- 3 2)))
+  '(let ([a (read)] [b (read)])
+     (if (= a b)
+         123456
+         (if (< a b)
+         (- b a)
+         (- a b)))))
 
+#;
+(lower-conds (assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr))))))
+(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+(newline)
+(display (expr->asm test-expr))
 
-(assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr)))))
-
-
+#;
 (compile-and-run test-expr)
