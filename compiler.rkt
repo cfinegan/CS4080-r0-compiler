@@ -17,6 +17,14 @@
     ; and
     [`(and ,arg1 ,arg2)
      `(if ,(r arg1) ,(r arg2) #f)]
+    ; optimize conditionals
+    [`(if ,cond ,then ,ow)
+     (match cond
+       [#t (r then)]
+       [#f (r ow)]
+       [`(not ,subexpr)
+        `(if ,(r subexpr) ,(r ow) ,(r then))]
+       [_ `(if ,(r cond) ,(r then) ,(r ow))])]
     ; Breaks var-args into 'pyramid' of calls
     [`(,(? var-args-op? op) ,arg1 ,args ..2)
      `(,op ,(r arg1) ,(r (cons op args)))]
@@ -24,7 +32,7 @@
     [(? list?)
      (map r expr)]
     ; Default
-    [_ expr]))
+    [_ expr]))     
 
 ;; Returns true if argument is a list in the form expected by the let macro.
 (define (let-var? v)
@@ -699,7 +707,6 @@
       ['mul "imulq"]
       ['div "idivq"]
       ['call "callq"]
-      #;['ret "ret"] ; TODO: is this even right?
       ['pop "popq"]
       ['push "pushq"]
       ['xor "xorq"]
@@ -756,17 +763,10 @@
 ;;; Utils for compiling and runnings ASM code
 ;;;
 (define (expr->asm expr)
-  
-  (define steps (list uniquify flatten-code select-insts uncover-live
-                      assign-homes lower-conds patch-insts print-asm))
-  
-  (for/fold ([prog expr])
-            ([step steps])
-    (call-with-values (λ () prog) step)))
-
-;  (define xprog (uncover-live (select-insts (flatten-code (uniquify expr)))))
-;  #;(define interference (build-interference xprog))
-;  (print-asm (patch-insts (assign-homes xprog))))
+  (define u-expr (uniquify (replace-syntax expr)))
+  (define C-stmts (uncover-live (select-insts (flatten-code u-expr))))
+  (define X-insts (patch-insts (lower-conds (assign-homes C-stmts))))
+  (print-asm X-insts))
 
 (define (compile-prog input-expr)
   (define asm-str (expr->asm input-expr))
@@ -844,7 +844,7 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-
+#;
 (define test-expr
   '(= 3 (- 4 1)))
 
@@ -859,7 +859,7 @@
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
-#;
+
 (define test-expr
   '(let ([a (read)] [b (read)])
      (if (= a b)
