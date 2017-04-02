@@ -7,6 +7,17 @@
 
 typedef int64_t int64;
 
+int64 read_int();
+void write_int(int64 n);
+void write_bool(int64 n);
+
+extern int r0func();
+
+int main(int argc, char* argv[]) {
+    write_int(r0func());
+    return EXIT_SUCCESS;
+}
+
 int64 read_int() {
     int64 n;
     int result;
@@ -34,11 +45,4 @@ void write_bool(int64 n) {
         perror("write_bool failed");
         exit(EXIT_FAILURE);
     }
-}
-
-extern int r0func();
-
-int main(int argc, char* argv[]) {
-    write_int(r0func());
-    return EXIT_SUCCESS;
 }
