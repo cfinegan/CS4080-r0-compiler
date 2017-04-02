@@ -272,7 +272,8 @@
        (define cond-expr
          (match cond
            [(? (or/c symbol? boolean?))
-            `(= ,(flatten-code 1 vartab) ,(flatten-code cond vartab))]
+            ; literal is on RHS so that it will be on LHS in cmp operation.
+            `(= ,(flatten-code cond vartab) ,(flatten-code 1 vartab))]
            [`(,op ,exp1 ,exp2)
             `(,op ,(flatten-code exp1 vartab) ,(flatten-code exp2 vartab))]))
        (match-define
@@ -358,6 +359,7 @@
           (list (binary-inst 'mov (arg->val arg) (var dest))
                 (binary-inst 'xor (int 1) (var dest)))]
          [`(,(? boolean-op? op) ,arg1 ,arg2)
+          ; x86_64 cmp is reversed, LHS of expr goes in RHS of inst.
           (list (binary-inst 'cmp (arg->val arg2) (arg->val arg1))
                 (unary-inst `(set ,op) (var dest)))]
          ['read
@@ -623,6 +625,7 @@
        (define then-label (next-label))
        (define end-label (next-label))
        (list
+        ; note: x86_64 cmp is backwards, R must be in left-hand position.
         (binary-inst 'cmp R L)
         (unary-inst `(jmp-if ,op) then-label)
         (map lower-cond ow-insts)
@@ -841,11 +844,11 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-#;
+
 (define test-expr
   '(= 3 (- 4 1)))
 
-
+#;
 (define test-expr
   '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
