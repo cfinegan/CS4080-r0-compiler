@@ -50,13 +50,13 @@
   ;; Returns the symtab value indexed by 'name', or 'name' itself if not in table.
   (define (render-name name symtab)
     (hash-ref symtab name name))
-
+  
   (define get-next-id
     (let ([next-id -1])
       (λ ()
         (set! next-id (add1 next-id))
         next-id)))
-
+  
   (let uniquify ([expr expr] [symtab #hash()])    
     (match expr
       [(? integer?) expr]
@@ -150,7 +150,7 @@
 ;      [`(let (,(? let-var? vars) ...) ,subexpr)
 ;       (error "let: coming soon!")]
 ;      [_ (error "typeof: Invalid expr:" expr)])))
-       
+
 
 
 ;;;
@@ -225,7 +225,7 @@
 ;;; Flattens an expression into a series of statements which only reference integers
 ;;; or variable names.
 (define (flatten-code expr)
-
+  
   ;; Should have the side effect of erroring if there are type errors in the program.
   (define expr-type (typeof expr))
   
@@ -240,9 +240,8 @@
   ;; from resetting the tmp-name count.
   (let flatten-code ([expr expr] [vartab #hash()])
     (match expr
-      [(? integer?) (program empty (list (return-stmt expr)))]
-      ;; converts #t and #f to integer 1/0.
-      [(? boolean?) (program empty (list (return-stmt (if expr 1 0))))]
+      [(? (or/c integer? boolean?))
+       (program empty (list (return-stmt expr)))]
       [(? symbol?)
        (define name-ref (hash-ref vartab expr #f))
        (if name-ref
@@ -269,18 +268,30 @@
        (program (set-union (program-vars var-prog) (program-vars subexpr-prog))
                 (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
       ;; if expression
-      [`(if ,cond ,then ,otherwise)
-       (match-define (program (list cond-vars ...) (list cond-stmts ... (return-stmt cond-ans)))
-         (flatten-code cond vartab))
+      [`(if ,cond ,then ,otherwise)       
+       (define cond-expr
+         (match cond
+           [(? (or/c symbol? boolean?))
+            `(= ,(flatten-code 1 vartab) ,(flatten-code cond vartab))]
+           [`(,op ,exp1 ,exp2)
+            `(,op ,(flatten-code exp1 vartab) ,(flatten-code exp2 vartab))]))
+       (match-define
+         (list
+          cond-op
+          (program (list ce1-vars ...) (list ce1-stmts ... (return-stmt ce1-ans)))
+          (program (list ce2-vars ...) (list ce2-stmts ... (return-stmt ce2-ans))))
+         cond-expr)
        (match-define (program (list then-vars ...) (list then-stmts ... (return-stmt then-ans)))
          (flatten-code then vartab))
        (match-define (program (list otherwise-vars ...) (list otherwise-stmts ... (return-stmt otherwise-ans)))
          (flatten-code otherwise vartab))
        (define dest-name (next-tmp-name))
-       (program (set-union cond-vars then-vars otherwise-vars (list dest-name))
-                (append cond-stmts
+       (program (set-union ce1-vars ce2-vars then-vars otherwise-vars (list dest-name))
+                (append ce1-stmts
+                        ce2-stmts
                         (list (if-stmt
-                               (return-stmt cond-ans) ; note cond is not a list of statements
+                               ;(return-stmt cond-ans) ; note cond is not a list of statements
+                               `(,cond-op ,ce1-ans ,ce2-ans)
                                (append then-stmts (list (assign-stmt then-ans dest-name)))
                                (append otherwise-stmts (list (assign-stmt otherwise-ans dest-name))))
                               (return-stmt dest-name))))]
@@ -314,26 +325,25 @@
 
 (struct binary-inst (op src dest) #:transparent)
 
-(struct if-inst (cond then thn-lives otherwise ow-lives) #:transparent)
-
 (struct xprogram (vars insts live-afters) #:transparent)
 
 ;;;
 ;;; select-insts
 (define (select-insts prog)
-
+  
   (define (arg->val arg)
     (match arg
       [(? integer?) (int arg)]
+      [(? boolean?) (int (if arg 1 0))]
       [(? symbol?) (var arg)]
       [_ (error "invalid arg:" arg)]))
-
+  
   (define (arith-name op)
     (match op
       ['+ 'add]
       ['- 'sub]
       [_ (error "invalid arith-op:" op)]))
-
+  
   (define (stmt->insts stmt)
     (match stmt
       [(assign-stmt src-expr (? symbol? dest))
@@ -356,11 +366,11 @@
          [(? symbol?)
           (binary-inst 'mov (var src-expr) (var dest))]
          [(? integer?)
-          (binary-inst 'mov (var src-expr) (var dest))])]
-      [(if-stmt (return-stmt cond-ans) then-stmts otherwise-stmts)
+          (binary-inst 'mov (int src-expr) (var dest))])]
+      [(if-stmt `(,cond-op ,L ,R) then-stmts otherwise-stmts)
        (if-stmt
-        ; note: cond is just a value which will be compared with #t when the if-stmt is lowered
-        cond-ans
+        ; cond
+        `(,cond-op ,(arg->val L) ,(arg->val R))
         ; then
         (flatten (map stmt->insts then-stmts))
         ; otherwise
@@ -378,20 +388,20 @@
 
 (define (uncover-live xprog)
   (match-define (xprogram vars all-insts emtpy) xprog)
-
+  
   (define (move-inst? op)
     (set-member? '(mov movzb) op))
-
+  
   #; ; TODO: Do we actually need this? right now it's never called, book recommends it.
   (define (get-vars inst)
     (filter
      var?
      (match inst
-      [(unary-inst op arg)
-       (list arg)]
-      [(binary-inst op arg1 arg2)
-       (list arg1 arg2)])))
-
+       [(unary-inst op arg)
+        (list arg)]
+       [(binary-inst op arg1 arg2)
+        (list arg1 arg2)])))
+  
   (define (get-reads inst)
     (filter
      var?
@@ -428,42 +438,46 @@
        ; all other binary insts are assumed to write to arg2
        [(binary-inst op arg1 arg2)
         (list arg2)])))
-
-  (define drop1 rest)
-
+  
+  (define drop1 rest)  
+  
   (define-values (insts l-afters)
     (let get-lives ([in-insts all-insts]
                     [in-l-afters (list empty)])
+      
       (for/fold ([insts empty]
                  [l-afters in-l-afters])
-                ([inst (reverse (drop1 in-insts))])
+                ([inst (reverse in-insts)])
         (define l-after (first l-afters))
-
+        
         (define-values (out-inst l-before)
           (match inst
-            [(if-stmt cond then ow)
-             (define cond-var (var cond)) ; TODO: literals will probably break this!
+            ; if statements
+            [(if-stmt `(,cond-op ,L ,R) then ow)
              (define-values (then-insts then-afters)
                (get-lives then (list l-after)))
              (define-values (ow-insts ow-afters)
                (get-lives ow (list l-after)))
              (values
-              (if-stmt/lives cond-var
-                             (cons (first then) then-insts) then-afters
-                             (cons (first ow) ow-insts) ow-afters)
-              (set-union (first then-afters) (first ow-afters) (list cond-var)))]
+              (if-stmt/lives `(,cond-op ,L ,R)
+                             then-insts
+                             (drop1 then-afters)
+                             ow-insts
+                             (drop1 ow-afters))
+              (set-union (first then-afters) (first ow-afters) (filter var? (list L R))))]
+            ; all other insts
             [_
              (values
               inst
               (set-union (set-subtract l-after (get-writes inst))
                          (get-reads inst)))]))
-                
+        
         (values
          (cons out-inst insts)
          (cons l-before l-afters)))))
   
   ;; add first inst back to insts before returning
-  (xprogram vars (cons (first all-insts) insts) l-afters))
+  (xprogram vars insts (drop1 l-afters)))
 
 
 ;;;
@@ -474,9 +488,9 @@
 (define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
 
 (define (build-interference xprog)
-
+  
   (match-define (xprogram vars insts live-afters) xprog)
-
+  
   (let ([insts-len (length insts)]
         [la-len (length live-afters)])
     (unless (= insts-len la-len)
@@ -484,9 +498,9 @@
        (format
         "insts (size: ~a) and live-afters (size: ~a) must have same length"
         insts-len la-len))))
-
+  
   (define graph (unweighted-graph/undirected empty))
-
+  
   (let build-inter ([insts insts]
                     [live-afters live-afters])
     (for ([inst insts]
@@ -510,7 +524,7 @@
            (build-inter ow ow-lives)
            void)]
         [_ void])))
-
+  
   graph)
 
 
@@ -526,72 +540,66 @@
 ;;; assign-homes
 ;;;
 (define (assign-homes xprog)
-
+  
   ;; TODO: diagnostic prints: keep or remove?
   
   (match-define (xprogram vars insts l-afters) xprog)
-
+  
   (define interference (build-interference xprog))
-
+  
   (define num-valid-registers (vector-length alloc-registers))
-
+  
   (define (color->home color)
     (if (< color num-valid-registers)
         (reg (vector-ref alloc-registers color))
         (deref 'rbp (- (* ptr-size (add1 (- color num-valid-registers)))))))
-    
+  
   (define-values (num-colors colorings)
     (coloring/greedy interference))
-
+  
   (display "num colors: ") (display num-colors) (newline)
-
+  
   (define spill-count (max 0 (- num-colors num-valid-registers)))
   (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
-
+  
   (display "spill count: ") (display spill-count) (newline)
   (display "stack size: ") (display stack-size) (newline)
-
-  ; print info about which var goes to what home
-  (newline)
-  (hash-for-each
-   colorings
-   (λ (key val)
-     (display (format "~a => ~a" key (color->home val)))(newline)))
-  (newline)
-
+  
   (define (get-var-home tok)
     (if (var? tok)
         ;; defaults to zero b/c colorings will be empty in case of no interference.
         (color->home (hash-ref colorings (var-name tok) 0))
         tok))
-
+  
   (define home-insts
     (let assign-homes ([insts insts]
                        [l-afters l-afters])
-    (flatten
-     (reverse
-      (for/fold ([out empty])
-                ([inst insts] [l-after l-afters])
-        (cons
-         (match inst
-           [(unary-inst 'call func)
-            (define lives (set-intersect (map get-var-home l-after) (map reg caller-saved)))
-            (append (map (λ (var) (unary-inst 'push var)) lives)
-                    (if (odd? (length lives))
-                        (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
-                              inst
-                              (binary-inst 'add (int ptr-size) (reg 'rsp)))
-                        (list inst))
-                    (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
-           [(unary-inst op arg)
-            (unary-inst op (get-var-home arg))]
-           [(binary-inst op src dest)
-            (binary-inst op (get-var-home src) (get-var-home dest))]
-           [(if-stmt/lives cond then then-afters ow ow-afters)
-            (if-stmt (get-var-home cond) (assign-homes then then-afters) (assign-homes ow ow-afters))]
-           )
-         out))))))
-
+      (flatten
+       (reverse
+        (for/fold ([out empty])
+                  ([inst insts] [l-after l-afters])
+          (cons
+           (match inst
+             [(unary-inst 'call func)
+              (define lives (set-intersect (map get-var-home l-after) (map reg caller-saved)))
+              (append (map (λ (var) (unary-inst 'push var)) lives)
+                      (if (odd? (length lives))
+                          (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
+                                inst
+                                (binary-inst 'add (int ptr-size) (reg 'rsp)))
+                          (list inst))
+                      (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
+             [(unary-inst op arg)
+              (unary-inst op (get-var-home arg))]
+             [(binary-inst op src dest)
+              (binary-inst op (get-var-home src) (get-var-home dest))]
+             [(if-stmt/lives `(,cond-op ,L ,R) then then-afters ow ow-afters)
+              (if-stmt `(,cond-op ,(get-var-home L) ,(get-var-home R))
+                       (assign-homes then then-afters)
+                       (assign-homes ow ow-afters))]
+             )
+           out))))))
+  
   (xxprogram stack-size home-insts))
 
 
@@ -602,37 +610,37 @@
 
 (define (lower-conds xxprog)
   (match-define (xxprogram stack-size insts) xxprog)
-
+  
   (define next-label
     (let ([next-id -1])
       (λ ()
         (set! next-id (add1 next-id))
         (format "r0L~a" next-id))))
-
+  
   (define (lower-cond inst)
     (match inst
-      [(if-stmt cond then-insts ow-insts)
+      [(if-stmt `(,op ,L ,R) then-insts ow-insts)
        (define then-label (next-label))
        (define end-label (next-label))
        (list
-        (binary-inst 'cmp (int 1) cond)
-        (unary-inst `(jmp-if =) then-label)
+        (binary-inst 'cmp R L)
+        (unary-inst `(jmp-if ,op) then-label)
         (map lower-cond ow-insts)
         (unary-inst 'jmp end-label)
         (label then-label)
         (map lower-cond then-insts)
         (label end-label))]
       [_ inst]))
-
+  
   (xxprogram stack-size (flatten (map lower-cond insts))))
 
 ;;;
 ;;; patch-insts
 ;;;
 (define (patch-insts xxprog)
-
+  
   (match-define (xxprogram stack-size insts) xxprog)
-
+  
   (define (patch inst)
     (match inst
       ;; remove trivial moves
@@ -653,7 +661,7 @@
        (list (unary-inst `(set ,op) (reg 'al))
              (binary-inst 'movzb (reg 'al) dest))]
       [_ inst]))
-
+  
   (xxprogram stack-size (flatten (map patch insts))))
 
 
@@ -724,35 +732,35 @@
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
   (define r0func-name (fmt-funcname "r0func"))
-
+  
   (define asm-prefix (string-append "\t.text\n\t.globl " r0func-name "\n" r0func-name ":\n"))
-
+  
   (define stack-prefix (string-append (fmt-asm "pushq" "%rbp")
                                       (fmt-asm "movq" "%rsp" "%rbp")
                                       (if (= 0 stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
-
+  
   (define stack-suffix (string-append (if (= 0 stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
                                       (fmt-asm "popq" "%rbp")))
-
+  
   (define main-return (fmt-asm "retq"))
-
+  
   (define final-asm
     (string-append asm-prefix stack-prefix (apply string-append (map inst->asm insts)) stack-suffix main-return))
-
+  
   final-asm)
 
 ;;;
 ;;; Utils for compiling and runnings ASM code
 ;;;
 (define (expr->asm expr)
-
+  
   (define steps (list uniquify flatten-code select-insts uncover-live
                       assign-homes lower-conds patch-insts print-asm))
-
+  
   (for/fold ([prog expr])
             ([step steps])
     (call-with-values (λ () prog) step)))
-  
+
 ;  (define xprog (uncover-live (select-insts (flatten-code (uniquify expr)))))
 ;  #;(define interference (build-interference xprog))
 ;  (print-asm (patch-insts (assign-homes xprog))))
@@ -772,7 +780,7 @@
                             "./bin/r0prog")))
     (unless (zero? exit-status)
       (error "program failed with exit status:" exit-status))))
-    
+
 
 ;; TODO: Fix runtime.c to print output (instead of returning it from main) and turn this back on!
 #;
@@ -781,7 +789,7 @@
   (define exe-path (if (eq? (system-type 'os) 'windows)
                        "bin\\r0prog"
                        "./bin/r0prog"))
-
+  
   (unless (not (compile-prog input-expr))
     (define-values (sub-proc stdout stdin stderr)
       (subprocess #f #f (current-error-port) (string->path exe-path)))
@@ -837,7 +845,7 @@
 (define test-expr
   '(= 3 (- 4 1)))
 
-#;
+
 (define test-expr
   '(let ([x (+ 2 3)] [y (- 5)] [a 55])
      (let ([x (- x y)] [z (+ x y)])
@@ -848,20 +856,25 @@
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
-
+#;
 (define test-expr
   '(let ([a (read)] [b (read)])
      (if (= a b)
          123456
          (if (< a b)
-         (- b a)
-         (- a b)))))
+             (- b a)
+             (- a b)))))
 
-#;
-(lower-conds (assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr))))))
-(uncover-live (select-insts (flatten-code (uniquify test-expr))))
-(newline)
-(display (expr->asm test-expr))
 
-#;
+;(lower-conds (assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr))))))
+;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+;(newline)
+;(display (expr->asm test-expr))
+
+;(select-insts (flatten-code (uniquify test-expr)))
+;(newline)(newline)
+;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+
+
+
 (compile-and-run test-expr)
