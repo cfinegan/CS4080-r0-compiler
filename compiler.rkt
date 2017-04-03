@@ -87,79 +87,12 @@
 (define (boolean-op? op)
   (set-member? '(= < > <= >=) op))
 
-;; Defines types for use in validating program integrity.
-(define Void 'Void)
-(define Integer 'Integer)
-(define Boolean 'Boolean)
-
-;(struct ht (type val) #:transparent)
-;
-;(struct typed-expr (type env expr) #:transparent)
-;
-;
-;(define (typeof- expr)
-;
-;  (define (fmt-type-error arg expected-type expr)
-;    (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
-;            arg expected-type expr))
-;  
-;  (let typeof ([expr expr] [env #hash()])
-;    (match expr
-;      [(? integer?)
-;       (ht Integer expr)]
-;      [(? boolean?)
-;       (ht Boolean expr)]
-;      [(? symbol?)
-;       ; crash if symbol doesn't exist in environment.
-;       (ht (hash-ref env expr) expr)]
-;      [`(read)
-;       (ht Integer expr)]
-;      [`(not ,arg)
-;       (define arg-t (typeof arg env))
-;       (unless (eq? Boolean (ht-type arg-t))
-;         (error (fmt-type-error arg Boolean expr)))
-;       arg-t]
-;      ; boolean comparison
-;      [`(,(? boolean-op? op) ,args ...)
-;       (define args-t
-;         (map
-;          (λ (arg)
-;            (define arg-t (typeof arg env))
-;            (unless (eq? Integer (ht-type arg-t))
-;              (error (fmt-type-error arg Integer expr)))
-;            arg-t)
-;          args))
-;       (ht Boolean (cons op args-t))]
-;      ; arithmetic expression
-;      [`(,(? arith-op? op) ,args ...)
-;       (define args-t
-;         (map
-;          (λ (arg)
-;            (define arg-t (typeof arg env))
-;            (unless (eq? Integer (ht-type arg-t))
-;              (error (fmt-type-error arg Integer expr)))
-;            arg-t)
-;          args))
-;       (ht Integer (cons op args-t))]
-;      ; if expression
-;      [`(if ,cond ,then ,otherwise)
-;       (define cond-t (typeof cond env))
-;       (unless (eq? Boolean (ht-type cond-t))
-;         (error (fmt-type-error cond Boolean expr)))
-;       (define then-t (typeof then env))
-;       (define otherwise-t (typeof otherwise env))
-;       (unless (eq? (ht-type then-t) (ht-type otherwise-t))
-;         (error (format "'~a' and '~a' mismatch types in expr: ~a"
-;                        then otherwise expr)))
-;       (ht (ht-type then-t) `(if ,cond-t then-t otherwise-t))]
-;      ; let statement
-;      [`(let (,(? let-var? vars) ...) ,subexpr)
-;       (error "let: coming soon!")]
-;      [_ (error "typeof: Invalid expr:" expr)])))
-
+;;;
+;;; typeof: Returns the type of any well-formed expression.
+;;;
 (struct ht (e T) #:transparent)
 
-(define (typeof- expr)
+(define (typeof expr)
   (define (fmt-type-error arg expected-type expr)
     (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
             arg expected-type expr))
@@ -176,12 +109,70 @@
        (ht '(void) 'Void)]
       ['(read)
        (ht '(read) 'Integer)]
-      
+      ; not
+      [`(not ,arg)
+       (define ty-arg (recur arg))
+       (unless (eq? (ht-T ty-arg) 'Boolean)
+         (error (fmt-type-error arg 'Boolean expr)))
+       (ht `(not ,ty-arg)
+           'Boolean)]
+      ; unary negation
+      [`(- ,arg)
+       (define ty-arg (recur arg))
+       (unless (eq? (ht-T ty-arg) 'Integer)
+         (error (fmt-type-error arg 'Integer expr)))
+       (ht `(- ,ty-arg)
+           'Integer)]
+      ; boolean comparison
+      [`(,(? boolean-op? op) ,arg1 ,arg2)
+       (define ty-arg1 (recur arg1))
+       (unless (eq? (ht-T ty-arg1) 'Integer)
+         (error (fmt-type-error arg1 'Integer expr)))
+       (define ty-arg2 (recur arg2))
+       (unless (eq? (ht-T ty-arg2) 'Integer)
+         (error (fmt-type-error arg2 'Integer expr)))
+       (ht `(,op ,ty-arg1 ,ty-arg2)
+           'Boolean)]
+      ; arith expressions
+      [`(,(? arith-op? op) ,arg1 ,arg2)
+       (define ty-arg1 (recur arg1))
+       (unless (eq? (ht-T ty-arg1) 'Integer)
+         (error (fmt-type-error arg1 'Integer expr)))
+       (define ty-arg2 (recur arg2))
+       (unless (eq? (ht-T ty-arg2) 'Integer)
+         (error (fmt-type-error arg2 'Integer expr)))
+       (ht `(,op ,ty-arg1 ,ty-arg2)
+           'Integer)]
+      ; if expression
+      [`(if ,cond ,then ,ow)
+       (define ty-cond (recur cond))
+       (unless (eq? (ht-T ty-cond) 'Boolean)
+         (error (fmt-type-error cond 'Boolean expr)))
+       (define ty-then (recur then))
+       (define ty-ow (recur ow))
+       (unless (equal? (ht-T ty-then) (ht-T ty-ow))
+         (error "typeof: 'then' and 'else' branches have mismatched types in expr:" expr))
+       (ht `(if ,ty-cond ,ty-then ,ty-ow)
+           (ht-T ty-then))]
+      ; let statement
+      [`(let (,(? let-var? vars) ...) ,subexpr)
+       (define-values (ty-vars next-env)
+         (for/fold ([ty-vars empty] [next-env env])
+                   ([var vars])
+           (define name (first var))
+           (define var-expr (recur (second var)))
+           (values
+            (cons `(,name ,var-expr) ty-vars)
+            (hash-set next-env name (ht-T var-expr)))))
+       (define ty-subexpr (typeof next-env subexpr))
+       (ht `(let ,ty-vars ,ty-subexpr)
+           (ht-T ty-subexpr))]
+      ; vector
       [`(vector ,args ..1)
        (define ty-args (map recur args))
        (ht (cons 'vector ty-args)
                  (cons 'Vector (map ht-T ty-args)))]
-
+      ; vector-ref
       [`(vector-ref ,vec ,i)
        (define ty-vec (recur vec))
        (match (ht-T ty-vec)
@@ -192,7 +183,7 @@
           (ht `(vector-ref ,ty-vec ,i)
               (list-ref tys i))]
          [else (error (format "typeof: vector-ref expects a Vector, not ~a" vec))])]
-
+      ; vector-set!
       [`(vector-set! ,vec ,i ,arg)
        (define ty-vec (recur vec))
        (define ty-arg (recur arg))
@@ -207,76 +198,9 @@
           (ht `(vector-set! ,ty-vec ,i ,ty-arg)
               'Void)]
          [else (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])]
+      ; error
+      [else (error "invalid expression:" expr)]
       )))
-
-#;
-(define test-expr
-  '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
-
-#;
-(define test-expr
-  '(vector-ref (vector 42) 0))
-
-
-(define test-expr
-  '(vector-set! (vector 42 #f) 0 32))
-
-#;
-(define test-expr
-  '(vector (vector 42) #f))
-
-(typeof- test-expr)
-
-;;;
-;;; typeof: Returns the type of any well-formed expression.
-;;;
-(define (typeof expr)
-  (let typeof ([expr expr] [env #hash()])
-    (match expr
-      [(? integer?) Integer]
-      [(? boolean?) Boolean]
-      ;; crash if symbol doesn't exist in environment.
-      [(? symbol?) (hash-ref env expr)] 
-      [`(read) Integer]
-      [`(not ,arg)
-       (unless (eq? (typeof arg env) Boolean)
-         (error (string-append "typeof: Invalid argument (expected Boolean) '" (~a arg) "' in expr: " (~a expr))))
-       Boolean]
-      ;; boolean comparison
-      [`(,(? boolean-op?) ,args ...)
-       (for-each
-        (λ (arg)
-          (unless (eq? (typeof arg env) Integer)
-            (error (string-append "typeof: Invalid argument (expected Integer) '" (~a arg) "' in expr: " (~a expr)))))
-        args)
-       Boolean]
-      ;; arithmetic statement
-      [`(,(? arith-op?) ,args ...)
-       (for-each
-        (λ (arg)
-          (unless (eq? (typeof arg env) Integer)
-            (error (string-append "typeof: Invalid argument (expected Integer) '" (~a arg) "' in expr: " (~a expr)))))
-        args)
-       Integer]
-      ;; if statement
-      [`(if ,cond ,then ,otherwise)
-       (unless (eq? (typeof cond env) Boolean)
-         (error (string-append "typeof: Invalid conditional (expected Boolean) '" (~a cond) "' in expr: " (~a expr))))
-       (define then-type (typeof then env))
-       (unless (eq? then-type (typeof otherwise env))
-         (error (string-append "typeof: Conditional statements '" (~a then) "' and '"
-                               (~a otherwise) "' mismatch types in expr: " (~a expr))))
-       then-type]
-      ;; let statement
-      [`(let (,(? let-var? vars) ...) ,subexpr)
-       (define next-env
-         (for/fold ([table env]) ([var vars])
-           (define name (first var))
-           (define var-expr (second var))
-           (hash-set table name (typeof var-expr env))))
-       (typeof subexpr next-env)]
-      [_ (error "typeof: Invalid expr:" expr)])))
-
 
 ;;;
 ;;; expose allocation
@@ -930,7 +854,7 @@
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
-#;
+
 (define test-expr
   '(let ([a (read)] [b (read)])
      (if (= a b)
@@ -954,5 +878,5 @@
 ;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
 
 
-#;
+
 (compile-and-run test-expr)
