@@ -157,7 +157,7 @@
 ;       (error "let: coming soon!")]
 ;      [_ (error "typeof: Invalid expr:" expr)])))
 
-(struct has-type (e T) #:transparent)
+(struct ht (e T) #:transparent)
 
 (define (typeof- expr)
   (define (fmt-type-error arg expected-type expr)
@@ -167,44 +167,65 @@
     (define (recur e) (typeof env e))
     (match expr
       [(? integer?)
-       (has-type expr 'Integer)]
+       (ht expr 'Integer)]
       [(? boolean?)
-       (has-type expr 'Boolean)]
+       (ht expr 'Boolean)]
       [(? symbol?)
-       (has-type expr (hash-ref env expr))]
+       (ht expr (hash-ref env expr))]
       ['(void)
-       (has-type '(void) 'Void)]
+       (ht '(void) 'Void)]
       ['(read)
-       (has-type '(read) 'Integer)]
+       (ht '(read) 'Integer)]
+      
       [`(vector ,args ..1)
        (define ty-args (map recur args))
-       (has-type `(vector ,(map has-type-e ty-args))
-                 (cons 'Vector (map has-type-T ty-args)))]
-            
+       (ht (cons 'vector ty-args)
+                 (cons 'Vector (map ht-T ty-args)))]
+
       [`(vector-ref ,vec ,i)
-       (match (recur vec)
-         [(has-type ty-vec `(Vector ,tys ..1))
+       (define ty-vec (recur vec))
+       (match (ht-T ty-vec)
+         [`(Vector ,tys ..1)
           (unless (and (exact-nonnegative-integer? i)
                        (< i (length tys)))
             (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
-          (has-type `(vector-ref ,(has-type ty-vec `(Vector ,tys)) ,i)
-                    (list-ref tys i))]
-         [_ (error (format "typeof: vector-ref expects Vector, not ~a" vec))])]
-      
+          (ht `(vector-ref ,ty-vec ,i)
+              (list-ref tys i))]
+         [else (error (format "typeof: vector-ref expects a Vector, not ~a" vec))])]
+
       [`(vector-set! ,vec ,i ,arg)
-       (match (recur vec)
-         [(has-type ty-expr `(Vector ,tys ..1))
+       (define ty-vec (recur vec))
+       (define ty-arg (recur arg))
+       (match (ht-T ty-vec)
+         [`(Vector ,tys ..1)
           (unless (and (exact-nonnegative-integer? i)
                        (< i (length tys)))
             (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
-          (define ex-ty (list-ref tys i))
-          (define arg-ty (recur arg))
-          (unless (equal? arg-ty ex-ty)
-            (error (fmt-type-error arg  ex-ty expr)))
-          (has-type ty-expr arg-ty)]
-         [_ (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])])))
-       
-      
+          (define expect-ty (list-ref tys i))
+          (unless (equal? (ht-T ty-arg) expect-ty)
+            (error (fmt-type-error arg expect-ty expr)))
+          (ht `(vector-set! ,ty-vec ,i ,ty-arg)
+              'Void)]
+         [else (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])]
+      )))
+
+#;
+(define test-expr
+  '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
+
+#;
+(define test-expr
+  '(vector-ref (vector 42) 0))
+
+
+(define test-expr
+  '(vector-set! (vector 42 #f) 0 32))
+
+#;
+(define test-expr
+  '(vector (vector 42) #f))
+
+(typeof- test-expr)
 
 ;;;
 ;;; typeof: Returns the type of any well-formed expression.
@@ -256,6 +277,11 @@
        (typeof subexpr next-env)]
       [_ (error "typeof: Invalid expr:" expr)])))
 
+
+;;;
+;;; expose allocation
+;;;
+; coming soon!
 
 ;; ========
 ;; Creates a new return statement.
@@ -904,7 +930,7 @@
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
-
+#;
 (define test-expr
   '(let ([a (read)] [b (read)])
      (if (= a b)
@@ -912,6 +938,10 @@
          (if (< a b)
              (- b a)
              (- a b)))))
+
+#;
+(define test-expr
+  '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
 
 ;(lower-conds (assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr))))))
