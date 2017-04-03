@@ -7,9 +7,6 @@
   (define (var-args-op? op)
     (set-member? '(+ - * or and) op))
   (match expr
-    ; not
-    [`(not ,arg)
-     `(if ,(r arg) #f #t)]
     ; or
     [`(or ,arg1 ,arg2)
      `(let ([or.tmp ,(r arg1)])
@@ -91,6 +88,7 @@
   (set-member? '(= < > <= >=) op))
 
 ;; Defines types for use in validating program integrity.
+(define Void 'Void)
 (define Integer 'Integer)
 (define Boolean 'Boolean)
 
@@ -159,7 +157,54 @@
 ;       (error "let: coming soon!")]
 ;      [_ (error "typeof: Invalid expr:" expr)])))
 
+(struct has-type (e T) #:transparent)
 
+(define (typeof- expr)
+  (define (fmt-type-error arg expected-type expr)
+    (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
+            arg expected-type expr))
+  (let typeof ([env #hash()] [expr expr])
+    (define (recur e) (typeof env e))
+    (match expr
+      [(? integer?)
+       (has-type expr 'Integer)]
+      [(? boolean?)
+       (has-type expr 'Boolean)]
+      [(? symbol?)
+       (has-type expr (hash-ref env expr))]
+      ['(void)
+       (has-type '(void) 'Void)]
+      ['(read)
+       (has-type '(read) 'Integer)]
+      [`(vector ,args ..1)
+       (define ty-args (map recur args))
+       (has-type `(vector ,(map has-type-e ty-args))
+                 (cons 'Vector (map has-type-T ty-args)))]
+            
+      [`(vector-ref ,vec ,i)
+       (match (recur vec)
+         [(has-type ty-vec `(Vector ,tys ..1))
+          (unless (and (exact-nonnegative-integer? i)
+                       (< i (length tys)))
+            (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
+          (has-type `(vector-ref ,(has-type ty-vec `(Vector ,tys)) ,i)
+                    (list-ref tys i))]
+         [_ (error (format "typeof: vector-ref expects Vector, not ~a" vec))])]
+      
+      [`(vector-set! ,vec ,i ,arg)
+       (match (recur vec)
+         [(has-type ty-expr `(Vector ,tys ..1))
+          (unless (and (exact-nonnegative-integer? i)
+                       (< i (length tys)))
+            (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
+          (define ex-ty (list-ref tys i))
+          (define arg-ty (recur arg))
+          (unless (equal? arg-ty ex-ty)
+            (error (fmt-type-error arg  ex-ty expr)))
+          (has-type ty-expr arg-ty)]
+         [_ (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])])))
+       
+      
 
 ;;;
 ;;; typeof: Returns the type of any well-formed expression.
@@ -879,5 +924,5 @@
 ;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
 
 
-
+#;
 (compile-and-run test-expr)
