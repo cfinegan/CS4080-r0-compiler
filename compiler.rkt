@@ -205,7 +205,10 @@
 ;;;
 ;;; expose allocation
 ;;;
-; coming soon!
+;(define (expose-alloc expr)
+;  (match-define (ht expr ty) expr)
+;  (match expr
+;    [`(vector ,args ..1)
 
 ;; ========
 ;; Creates a new return statement.
@@ -527,8 +530,8 @@
          (begin
            (build-inter then then-lives)
            (build-inter ow ow-lives)
-           void)]
-        [_ void])))
+           (void))]
+        [else (void)])))
   
   graph)
 
@@ -770,6 +773,7 @@
   (close-output-port out-file)
   (system "make"))
 
+
 (define (compile-and-run input-expr)
   (unless (not (compile-prog input-expr))
     (define exit-status
@@ -782,26 +786,22 @@
 
 ;; TODO: Fix runtime.c to print output (instead of returning it from main) and turn this back on!
 #;
-(define (compile-and-run input-expr)
-  
+(define (compile-and-run expr)
   (define exe-path (if (eq? (system-type 'os) 'windows)
                        "bin\\r0prog"
                        "./bin/r0prog"))
-  
-  (unless (not (compile-prog input-expr))
-    (define-values (sub-proc stdout stdin stderr)
-      (subprocess #f #f (current-error-port) (string->path exe-path)))
-    (thread (λ ()
-              (display "" stdin)
-              (close-output-port stdin)))
-    (subprocess-wait sub-proc)
-    (define exit-status (subprocess-status sub-proc))
-    (unless (zero? exit-status)
-      (error "error running program:" exit-status))
+  (unless (not (compile-prog expr))
+    (define-values (sp stdout stdin stderr)
+      (subprocess #f #f 'stdout exe-path))
+    (thread (λ () (close-output-port stdin)))
+    (subprocess-wait sp)
+    (define st (subprocess-status sp))
+    (unless (zero? st)
+      (error "program failed with exit status:" st))
     (define a (read stdout))
     (close-input-port stdout)
     a))
-
+               
 ;;;
 ;;; TESTS
 ;;;
@@ -850,11 +850,11 @@
        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
-#;
+
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
-
+#;
 (define test-expr
   '(let ([a (read)] [b (read)])
      (if (= a b)
