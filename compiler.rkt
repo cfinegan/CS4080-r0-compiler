@@ -721,7 +721,7 @@
   (match arg
     [(int n) (int->asm n)]
     [(reg r) (string-append "%" (symbol->string r))]
-    [(deref r offset) (string-append (if (= offset 0) "" (number->string offset)) "(%" (symbol->string r) ")")]
+    [(deref r offset) (string-append (if (zero? offset) "" (number->string offset)) "(%" (symbol->string r) ")")]
     [(? string? str) (fmt-funcname str)]))
 
 (define (inst->asm inst)
@@ -742,9 +742,9 @@
   
   (define stack-prefix (string-append (fmt-asm "pushq" "%rbp")
                                       (fmt-asm "movq" "%rsp" "%rbp")
-                                      (if (= 0 stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
+                                      (if (zero? stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
   
-  (define stack-suffix (string-append (if (= 0 stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
+  (define stack-suffix (string-append (if (zero? stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
                                       (fmt-asm "popq" "%rbp")))
   
   (define main-return (fmt-asm "retq"))
