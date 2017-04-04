@@ -650,7 +650,7 @@
   (define (patch inst)
     (match inst
       ;; remove trivial moves
-      [(binary-inst 'mov (? reg? src) (? reg? dest))
+      [(binary-inst 'mov src dest)
        (if (equal? src dest)
            empty
            inst)]
