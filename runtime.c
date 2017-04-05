@@ -15,12 +15,13 @@ void write_any(int64 n, int64 ty);
 
 extern int r0func();
 
-extern int ty_void;
-extern int ty_integer;
-extern int ty_boolean;
+extern int64 ty_void;
+extern int64 ty_integer;
+extern int64 ty_boolean;
 
 int main(int argc, char* argv[]) {
     write_int(r0func());
+    //r0func();
     return EXIT_SUCCESS;
 }
 
