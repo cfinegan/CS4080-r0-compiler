@@ -750,20 +750,19 @@
   (define ty_integer (fmt-funcname "ty_integer"))
   (define ty_boolean (fmt-funcname "ty_boolean"))
 
+  (define (globl-names)
+    (define (fmt-globl label)
+      (format "\t.globl ~a\n" label))
+    (string-append
+     (fmt-globl r0func-name)
+     (fmt-globl ty_void)
+     (fmt-globl ty_integer)
+     (fmt-globl ty_boolean)))
+
   (define asm-prefix
     (string-append
-     "\t.data\n"
-     (format "~a:\n" ty_void)
-     (format "\t.quad ~a\n" (type->int 'Void))
-     (format "~a:\n" ty_integer)
-     (format "\t.quad ~a\n" (type->int 'Integer))
-     (format "~a:\n" ty_boolean)
-     (format "\t.quad ~a\n" (type->int 'Boolean))
      "\t.text\n"
-     (format "\t.globl ~a\n" r0func-name)
-     (format "\t.globl ~a\n" ty_void)
-     (format "\t.globl ~a\n" ty_integer)
-     (format "\t.globl ~a\n" ty_boolean)
+     (globl-names)
      (format "~a:\n" r0func-name)))
   
   (define stack-prefix
@@ -784,6 +783,15 @@
      (fmt-asm "popq" "%rbp")))
   
   (define main-return (fmt-asm "retq"))
+
+  (define type-table
+    (string-append
+     (format "~a:\n" ty_void)
+     (format "\t.quad ~a\n" (type->int 'Void))
+     (format "~a:\n" ty_integer)
+     (format "\t.quad ~a\n" (type->int 'Integer))
+     (format "~a:\n" ty_boolean)
+     (format "\t.quad ~a\n" (type->int 'Boolean))))
   
   (define final-asm
     (string-append
@@ -792,7 +800,8 @@
      (apply string-append (map inst->asm insts))
      #;print-call
      stack-suffix
-     main-return))
+     main-return
+     type-table))
   
   final-asm)
 
