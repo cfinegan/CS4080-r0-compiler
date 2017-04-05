@@ -736,24 +736,63 @@
     [(label name)
      (format "~a:\n" name)]))
 
+(define (type->int ty)
+  (match ty
+    ['Void 0]
+    ['Integer 1]
+    ['Boolean 2]))
+
 (define (print-asm xxprog)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
   (define r0func-name (fmt-funcname "r0func"))
+  (define ty_void (fmt-funcname "ty_void"))
+  (define ty_integer (fmt-funcname "ty_integer"))
+  (define ty_boolean (fmt-funcname "ty_boolean"))
+
+  (define asm-prefix
+    (string-append
+     "\t.data\n"
+     (format "~a:\n" ty_void)
+     (format "\t.quad ~a\n" (type->int 'Void))
+     (format "~a:\n" ty_integer)
+     (format "\t.quad ~a\n" (type->int 'Integer))
+     (format "~a:\n" ty_boolean)
+     (format "\t.quad ~a\n" (type->int 'Boolean))
+     "\t.text\n"
+     (format "\t.globl ~a\n" r0func-name)
+     (format "\t.globl ~a\n" ty_void)
+     (format "\t.globl ~a\n" ty_integer)
+     (format "\t.globl ~a\n" ty_boolean)
+     (format "~a:\n" r0func-name)))
   
-  (define asm-prefix (string-append "\t.text\n\t.globl " r0func-name "\n" r0func-name ":\n"))
+  (define stack-prefix
+    (string-append
+     (fmt-asm "pushq" "%rbp")
+     (fmt-asm "movq" "%rsp" "%rbp")
+     (if (zero? stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
+
+  (define print-call
+    (string-append
+     (fmt-asm "movq" "%rax" "%rdi")
+     (fmt-asm "movq" (int->asm (type->int 'Integer)) "%rsi")
+     (fmt-asm "callq" (fmt-funcname "write_any"))))
   
-  (define stack-prefix (string-append (fmt-asm "pushq" "%rbp")
-                                      (fmt-asm "movq" "%rsp" "%rbp")
-                                      (if (zero? stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
-  
-  (define stack-suffix (string-append (if (zero? stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
-                                      (fmt-asm "popq" "%rbp")))
+  (define stack-suffix
+    (string-append
+     (if (zero? stack-size) "" (fmt-asm "addq" (int->asm stack-size) "%rsp"))
+     (fmt-asm "popq" "%rbp")))
   
   (define main-return (fmt-asm "retq"))
   
   (define final-asm
-    (string-append asm-prefix stack-prefix (apply string-append (map inst->asm insts)) stack-suffix main-return))
+    (string-append
+     asm-prefix
+     stack-prefix
+     (apply string-append (map inst->asm insts))
+     #;print-call
+     stack-suffix
+     main-return))
   
   final-asm)
 
