@@ -35,6 +35,11 @@
          (error (fmt-type-error arg 'Boolean expr)))
        (ht `(not ,ty-arg)
            'Boolean)]
+      ; begin
+      [`(begin ,subexprs ..1)
+       (define ty-subs (map recur subexprs))
+       (ht (cons 'begin ty-subs)
+           (ht-T (last ty-subs)))]
       ; unary negation
       [`(- ,arg)
        (define ty-arg (recur arg))
@@ -90,7 +95,7 @@
       [`(vector ,args ..1)
        (define ty-args (map recur args))
        (ht (cons 'vector ty-args)
-                 (cons 'Vector (map ht-T ty-args)))]
+           (cons 'Vector (map ht-T ty-args)))]
       ; vector-ref
       [`(vector-ref ,vec ,i)
        (define ty-vec (recur vec))

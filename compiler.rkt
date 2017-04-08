@@ -33,7 +33,14 @@
     [(? list?)
      (map r expr)]
     ; Default
-    [_ expr]))     
+    [_ expr]))
+
+
+;(define (expose-alloc expr)
+;  (match expr
+;    [(ht `(vector ,args ...) `(Vector ,tys ...))
+;     (define bytes (length tys))
+;     (ht `(let 
 
 ;; ========
 ;; Creates a new return statement.
@@ -56,9 +63,6 @@
 ;;; Flattens an expression into a series of statements which only reference integers
 ;;; or variable names.
 (define (flatten-code expr)
-  
-  ;; Should have the side effect of erroring if there are type errors in the program.
-  #;(define expr-type (typeof expr))
   
   ;; Always returns the 'next' temporary name. Encapsulates mutable state.
   (define next-tmp-name
@@ -83,10 +87,25 @@
        (define dest-name (next-tmp-name))
        (program (list dest-name) (list (assign-stmt 'read dest-name)
                                        (return-stmt dest-name)))]
+      ;; void expression
       ['(void)
        (program empty (list (return-stmt 1)))]
+      ;; begin expression
+      [`(begin ,subexprs ..1)
+       (define subexpr-progs (map (λ (e) (flatten-code e vartab)) subexprs))
+       (define se-prog
+         (foldr
+          (λ (pr out)
+            (match-define (program (list out-vars ...) (list out-stmts ...)) out)
+            (match-define (program (list pr-vars ...) (list pr-stmts ... (return-stmt pr-ans))) pr)
+            (program (set-union out-vars pr-vars)
+                     (append pr-stmts out-stmts)))
+          (program empty empty)
+          subexpr-progs))
+       (program (program-vars se-prog)
+                (append (program-stmts se-prog) (list (last (program-stmts (last subexpr-progs))))))]
       ;; let expression
-      [`(let (,(? let-var? vars)...) ,subexpr)
+      [`(let (,(? let-var? vars) ...) ,subexpr)
        (define-values (next-vartab var-prog)
          (for/fold ([vartab vartab] [var-prog (program empty empty)])
                    ([var vars])
@@ -652,6 +671,15 @@
   (display asm-str out-file)
   (close-output-port out-file)
   (system "make"))
+;  (define r0prog-last-mod (file-or-directory-modify-seconds "bin/r0prog" #f (λ () 0)))
+;  (define asm-last-mod (file-or-directory-modify-seconds "bin/r0func.s" #f (λ () 0)))
+;  (unless (< asm-last-mod r0prog-last-mod)
+;    (define asm-str (expr->asm input-expr))
+;    (define out-file (open-output-file "bin/r0func.s" #:exists 'replace))
+;    (display asm-str out-file)
+;    (close-output-port out-file))
+  
+  
 
 ;; Runs the current program, optionally taking an input string to send the
 ;; program as standard input.

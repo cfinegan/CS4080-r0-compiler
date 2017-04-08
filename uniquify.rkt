@@ -37,6 +37,9 @@
       [(? boolean?) expr]
       [(? symbol?) (render-name expr symtab)]
       ['(read) '(read)]
+      ['(void) '(void)]
+      [`(begin ,subexprs ..1)
+       (cons 'begin (map (λ (subexpr) (uniquify subexpr symtab)) subexprs))]
       [`(let (,(? let-var? vars) ...) ,subexpr)
        (define next-symtab (symtab-with-vars symtab vars (get-next-id)))
        (define (render-var var)
