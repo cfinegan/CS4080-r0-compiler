@@ -164,6 +164,7 @@
 ;;;
 ;;; select-insts
 (define (select-insts prog)
+  (match-define (program vars stmts) prog)
   
   (define (arg->val arg)
     (match arg
@@ -213,7 +214,7 @@
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
-  (xprogram (program-vars prog) (flatten (map stmt->insts (program-stmts prog))) empty))
+  (xprogram vars (flatten (map stmt->insts stmts)) empty))
 
 
 ;;;
@@ -507,9 +508,9 @@
 (define (fmt-asm op . args)
   (string-append "\t" op "\t" (string-join args ", ") "\n"))
 
-(define (fmt-funcname func-name)
+(define (fmt-label label-name)
   (define func-prefix (if (eq? (system-type 'os) 'macosx) "_" ""))
-  (string-append func-prefix func-name))
+  (string-append func-prefix label-name))
 
 (define (int->asm n)
   (string-append "$" (number->string n)))
@@ -523,36 +524,35 @@
     ['>= "ge"]))
 
 (define (op->asm op)
-  (define op-str
-    (match op
-      ['neg "negq"]
-      ['mov "movq"]
-      ['add "addq"]
-      ['sub "subq"]
-      ['mul "imulq"]
-      ['div "idivq"]
-      ['call "callq"]
-      ['pop "popq"]
-      ['push "pushq"]
-      ['xor "xorq"]
-      ['cmp "cmpq"]
-      ['movzb "movzbq"]
-      ['jmp "jmp"]
-      [`(set ,bool-op)
-       (string-append "set" (op->cc bool-op))]
-      [`(jmp-if ,bool-op)
-       (string-append "j" (op->cc bool-op))]))
-  ; adds extra tab if the op name is too short
-  (if (< (string-length op-str) 4)
-      (string-append op-str "\t")
-      op-str))
+  (match op
+    ['neg "negq"]
+    ['mov "movq"]
+    ['add "addq"]
+    ['sub "subq"]
+    ['mul "imulq"]
+    ['div "idivq"]
+    ['call "callq"]
+    ['pop "popq"]
+    ['push "pushq"]
+    ['xor "xorq"]
+    ['cmp "cmpq"]
+    ['movzb "movzbq"]
+    ['jmp "jmp"]
+    [`(set ,bool-op)
+     (string-append "set" (op->cc bool-op))]
+    [`(jmp-if ,bool-op)
+     (string-append "j" (op->cc bool-op))]))
 
 (define (arg->asm arg)
   (match arg
-    [(int n) (int->asm n)]
-    [(reg r) (string-append "%" (symbol->string r))]
-    [(deref r offset) (string-append (if (zero? offset) "" (number->string offset)) "(%" (symbol->string r) ")")]
-    [(? string? str) (fmt-funcname str)]))
+    [(int n)
+     (int->asm n)]
+    [(reg r)
+     (string-append "%" (symbol->string r))]
+    [(deref r offset)
+     (string-append (if (zero? offset) "" (number->string offset)) "(%" (symbol->string r) ")")]
+    [(? string? str)
+     (fmt-label str)]))
 
 (define (inst->asm inst)
   (match inst
@@ -561,7 +561,7 @@
     [(binary-inst op src dest)
      (fmt-asm (op->asm op) (arg->asm src) (arg->asm dest))]
     [(label name)
-     (format "~a:\n" name)]))
+     (format "~a:\n" (fmt-label name))]))
 
 (define (type->int ty)
   (match ty
@@ -572,10 +572,10 @@
 (define (print-asm xxprog ty)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
-  (define r0func-name (fmt-funcname "r0func"))
-  (define ty_void (fmt-funcname "ty_void"))
-  (define ty_integer (fmt-funcname "ty_integer"))
-  (define ty_boolean (fmt-funcname "ty_boolean"))
+  (define r0func-name (fmt-label "r0func"))
+  (define ty_void (fmt-label "ty_void"))
+  (define ty_integer (fmt-label "ty_integer"))
+  (define ty_boolean (fmt-label "ty_boolean"))
 
   (define (globl-names)
     (define (fmt-globl label)
@@ -602,7 +602,7 @@
     (string-append
      (fmt-asm "movq" "%rax" "%rdi")
      (fmt-asm "movq" (int->asm (type->int ty)) "%rsi")
-     (fmt-asm "callq" (fmt-funcname "write_any"))))
+     (fmt-asm "callq" (fmt-label "write_any"))))
   
   (define stack-suffix
     (string-append
@@ -668,7 +668,7 @@
     [(= 1 st)
      (error (read-line stdout))]
     [(not (zero? st))
-     (error "program failed with exit status:" st)]
+     (error "r0 program failed with exit status:" st)]
     [else
      (define a (read stdout))
      (close-input-port stdout)
@@ -761,7 +761,7 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-
+#;
 (define test-expr
   '(= 3 (- 4 1)))
 
@@ -772,7 +772,7 @@
        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
-#;
+
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
