@@ -20,8 +20,7 @@ extern int64 ty_integer;
 extern int64 ty_boolean;
 
 int main(int argc, char* argv[]) {
-    write_int(r0func());
-    //r0func();
+    r0func();
     return EXIT_SUCCESS;
 }
 
@@ -41,7 +40,7 @@ int64 read_int() {
 }
 
 void write_void() {
-    if (printf("#<void>\n") == -1) {
+    if (printf("<#void>\n") == -1) {
         perror("write_void failed");
         exit(EXIT_FAILURE);
     }

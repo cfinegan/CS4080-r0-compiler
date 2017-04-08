@@ -1,6 +1,10 @@
 #lang racket
 
-(require graph)
+(require
+  graph
+  "types.rkt"
+  "uniquify.rkt"
+  "typeof.rkt")
 
 (define (replace-syntax expr)
   (define r replace-syntax)
@@ -31,185 +35,6 @@
     ; Default
     [_ expr]))     
 
-;; Returns true if argument is a list in the form expected by the let macro.
-(define (let-var? v)
-  (and (list? v) (= 2 (length v))))
-
-;;;
-;;; uniquify
-;;; Returns an expression that is syntactically identical to the input expression, but
-;;; with all variables given unique names.
-(define (uniquify expr)
-  
-  ;; Mangles a symbol name by appending '_#' to it, where '#' is the number in next-id.
-  (define (mangle-name sym next-id)
-    (string->symbol (string-append (symbol->string sym) "_" (number->string next-id))))
-  
-  ;; Returns a new hash table representing a new environment with 'vars' added.
-  ;; Symtab maps from names to mangled names.
-  (define (symtab-with-vars symtab vars next-id)
-    (for/fold ([table symtab]) ([var vars])
-      (define name (car var))
-      (hash-set table name (mangle-name name next-id))))
-  
-  ;; Returns the symtab value indexed by 'name', or 'name' itself if not in table.
-  (define (render-name name symtab)
-    (hash-ref symtab name name))
-  
-  (define get-next-id
-    (let ([next-id -1])
-      (λ ()
-        (set! next-id (add1 next-id))
-        next-id)))
-  
-  (let uniquify ([expr expr] [symtab #hash()])    
-    (match expr
-      [(? integer?) expr]
-      [(? boolean?) expr]
-      [(? symbol?) (render-name expr symtab)]
-      ['(read) '(read)]
-      [`(let (,(? let-var? vars) ...) ,subexpr)
-       (define next-symtab (symtab-with-vars symtab vars (get-next-id)))
-       (define (render-var var)
-         `(,(render-name (first var) next-symtab) ,(uniquify (second var) symtab)))
-       `(let ,(map render-var vars) ,(uniquify subexpr next-symtab))]
-      [`(if ,cond ,then ,otherwise)
-       `(if ,(uniquify cond symtab) ,(uniquify then symtab) ,(uniquify otherwise symtab))]
-      [(? list?)
-       (map (λ (subexpr) (uniquify subexpr symtab)) expr)]
-      [_ (error "uniquify - invalid expr:" expr)])))
-
-
-;; Some basic sets outlining what operators are valid for what purposes.
-(define (arith-op? op)
-  (set-member? '(+ -) op))
-
-(define (boolean-op? op)
-  (set-member? '(= < > <= >=) op))
-
-;;;
-;;; typeof: Returns the type of any well-formed expression.
-;;;
-(struct ht (e T) #:transparent)
-
-(define (typeof expr)
-  (define (fmt-type-error arg expected-type expr)
-    (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
-            arg expected-type expr))
-  (let typeof ([env #hash()] [expr expr])
-    (define (recur e) (typeof env e))
-    (match expr
-      [(? integer?)
-       (ht expr 'Integer)]
-      [(? boolean?)
-       (ht expr 'Boolean)]
-      [(? symbol?)
-       (ht expr (hash-ref env expr))]
-      ['(void)
-       (ht '(void) 'Void)]
-      ['(read)
-       (ht '(read) 'Integer)]
-      ; not
-      [`(not ,arg)
-       (define ty-arg (recur arg))
-       (unless (eq? (ht-T ty-arg) 'Boolean)
-         (error (fmt-type-error arg 'Boolean expr)))
-       (ht `(not ,ty-arg)
-           'Boolean)]
-      ; unary negation
-      [`(- ,arg)
-       (define ty-arg (recur arg))
-       (unless (eq? (ht-T ty-arg) 'Integer)
-         (error (fmt-type-error arg 'Integer expr)))
-       (ht `(- ,ty-arg)
-           'Integer)]
-      ; boolean comparison
-      [`(,(? boolean-op? op) ,arg1 ,arg2)
-       (define ty-arg1 (recur arg1))
-       (unless (eq? (ht-T ty-arg1) 'Integer)
-         (error (fmt-type-error arg1 'Integer expr)))
-       (define ty-arg2 (recur arg2))
-       (unless (eq? (ht-T ty-arg2) 'Integer)
-         (error (fmt-type-error arg2 'Integer expr)))
-       (ht `(,op ,ty-arg1 ,ty-arg2)
-           'Boolean)]
-      ; arith expressions
-      [`(,(? arith-op? op) ,arg1 ,arg2)
-       (define ty-arg1 (recur arg1))
-       (unless (eq? (ht-T ty-arg1) 'Integer)
-         (error (fmt-type-error arg1 'Integer expr)))
-       (define ty-arg2 (recur arg2))
-       (unless (eq? (ht-T ty-arg2) 'Integer)
-         (error (fmt-type-error arg2 'Integer expr)))
-       (ht `(,op ,ty-arg1 ,ty-arg2)
-           'Integer)]
-      ; if expression
-      [`(if ,cond ,then ,ow)
-       (define ty-cond (recur cond))
-       (unless (eq? (ht-T ty-cond) 'Boolean)
-         (error (fmt-type-error cond 'Boolean expr)))
-       (define ty-then (recur then))
-       (define ty-ow (recur ow))
-       (unless (equal? (ht-T ty-then) (ht-T ty-ow))
-         (error "typeof: 'then' and 'else' branches have mismatched types in expr:" expr))
-       (ht `(if ,ty-cond ,ty-then ,ty-ow)
-           (ht-T ty-then))]
-      ; let statement
-      [`(let (,(? let-var? vars) ...) ,subexpr)
-       (define-values (ty-vars next-env)
-         (for/fold ([ty-vars empty] [next-env env])
-                   ([var vars])
-           (define name (first var))
-           (define var-expr (recur (second var)))
-           (values
-            (cons `(,name ,var-expr) ty-vars)
-            (hash-set next-env name (ht-T var-expr)))))
-       (define ty-subexpr (typeof next-env subexpr))
-       (ht `(let ,ty-vars ,ty-subexpr)
-           (ht-T ty-subexpr))]
-      ; vector
-      [`(vector ,args ..1)
-       (define ty-args (map recur args))
-       (ht (cons 'vector ty-args)
-                 (cons 'Vector (map ht-T ty-args)))]
-      ; vector-ref
-      [`(vector-ref ,vec ,i)
-       (define ty-vec (recur vec))
-       (match (ht-T ty-vec)
-         [`(Vector ,tys ..1)
-          (unless (and (exact-nonnegative-integer? i)
-                       (< i (length tys)))
-            (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
-          (ht `(vector-ref ,ty-vec ,i)
-              (list-ref tys i))]
-         [else (error (format "typeof: vector-ref expects a Vector, not ~a" vec))])]
-      ; vector-set!
-      [`(vector-set! ,vec ,i ,arg)
-       (define ty-vec (recur vec))
-       (define ty-arg (recur arg))
-       (match (ht-T ty-vec)
-         [`(Vector ,tys ..1)
-          (unless (and (exact-nonnegative-integer? i)
-                       (< i (length tys)))
-            (error (format "typeof: Vector index ~a is out of range in expr: ~a" i expr)))
-          (define expect-ty (list-ref tys i))
-          (unless (equal? (ht-T ty-arg) expect-ty)
-            (error (fmt-type-error arg expect-ty expr)))
-          (ht `(vector-set! ,ty-vec ,i ,ty-arg)
-              'Void)]
-         [else (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])]
-      ; error
-      [else (error "invalid expression:" expr)]
-      )))
-
-;;;
-;;; expose allocation
-;;;
-;(define (expose-alloc expr)
-;  (match-define (ht expr ty) expr)
-;  (match expr
-;    [`(vector ,args ..1)
-
 ;; ========
 ;; Creates a new return statement.
 (struct return-stmt (arg) #:transparent)
@@ -233,7 +58,7 @@
 (define (flatten-code expr)
   
   ;; Should have the side effect of erroring if there are type errors in the program.
-  (define expr-type (typeof expr))
+  #;(define expr-type (typeof expr))
   
   ;; Always returns the 'next' temporary name. Encapsulates mutable state.
   (define next-tmp-name
@@ -258,6 +83,8 @@
        (define dest-name (next-tmp-name))
        (program (list dest-name) (list (assign-stmt 'read dest-name)
                                        (return-stmt dest-name)))]
+      ['(void)
+       (program empty (list (return-stmt 1)))]
       ;; let expression
       [`(let (,(? let-var? vars)...) ,subexpr)
        (define-values (next-vartab var-prog)
@@ -742,7 +569,7 @@
     ['Integer 1]
     ['Boolean 2]))
 
-(define (print-asm xxprog)
+(define (print-asm xxprog ty)
   (define stack-size (xxprogram-stack-size xxprog))
   (define insts (xxprogram-insts xxprog))
   (define r0func-name (fmt-funcname "r0func"))
@@ -774,7 +601,7 @@
   (define print-call
     (string-append
      (fmt-asm "movq" "%rax" "%rdi")
-     (fmt-asm "movq" (int->asm (type->int 'Integer)) "%rsi")
+     (fmt-asm "movq" (int->asm (type->int ty)) "%rsi")
      (fmt-asm "callq" (fmt-funcname "write_any"))))
   
   (define stack-suffix
@@ -798,7 +625,7 @@
      asm-prefix
      stack-prefix
      (apply string-append (map inst->asm insts))
-     #;print-call
+     print-call
      stack-suffix
      main-return
      type-table))
@@ -808,51 +635,98 @@
 ;;;
 ;;; Utils for compiling and runnings ASM code
 ;;;
+
+;; Creates an ASM string from an input expression.
 (define (expr->asm expr)
   (define u-expr (uniquify (replace-syntax expr)))
+  (define typed-expr (typeof u-expr))
+  (define return-type (ht-T typed-expr))
   (define C-stmts (uncover-live (select-insts (flatten-code u-expr))))
   (define X-insts (patch-insts (lower-conds (assign-homes C-stmts))))
-  (print-asm X-insts))
+  (print-asm X-insts return-type))
 
-(define (compile-prog input-expr)
+;; Compiles the program using whatever's currently in the "./bin/" directory.
+(define (compile input-expr)
   (define asm-str (expr->asm input-expr))
   (define out-file (open-output-file "bin/r0func.s" #:exists 'replace))
   (display asm-str out-file)
   (close-output-port out-file)
   (system "make"))
 
+;; Runs the current program, optionally taking an input string to send the
+;; program as standard input.
+(define (run #:in [in-str ""])
+  (match-define-values
+   (sp stdout stdin #f)
+   (subprocess #f #f 'stdout "./bin/r0prog"))
+  (thread (λ ()
+            (display in-str stdin)
+            (close-output-port stdin)))
+  (subprocess-wait sp)
+  (define st (subprocess-status sp))
+  (cond
+    [(= 1 st)
+     (error (read-line stdout))]
+    [(not (zero? st))
+     (error "program failed with exit status:" st)]
+    [else
+     (define a (read stdout))
+     (close-input-port stdout)
+     a]))
 
-(define (compile-and-run input-expr)
-  (unless (not (compile-prog input-expr))
-    (define exit-status
-      (system/exit-code (if (eq? (system-type 'os) 'windows)
-                            "bin\\r0prog"
-                            "./bin/r0prog")))
-    (unless (zero? exit-status)
-      (error "program failed with exit status:" exit-status))))
-
-
-;; TODO: Fix runtime.c to print output (instead of returning it from main) and turn this back on!
-#;
-(define (compile-and-run expr)
-  (define exe-path (if (eq? (system-type 'os) 'windows)
-                       "bin\\r0prog"
-                       "./bin/r0prog"))
-  (unless (not (compile-prog expr))
-    (define-values (sp stdout stdin stderr)
-      (subprocess #f #f 'stdout exe-path))
-    (thread (λ () (close-output-port stdin)))
-    (subprocess-wait sp)
-    (define st (subprocess-status sp))
-    (unless (zero? st)
-      (error "program failed with exit status:" st))
-    (define a (read stdout))
-    (close-input-port stdout)
-    a))
+;; Shorthand for compiling and running an expression, optionally with input.
+(define (compile/run expr #:in [in-str ""])
+  (unless (not (compile expr))
+    (run #:in in-str)))
+  
                
 ;;;
 ;;; TESTS
 ;;;
+
+(define (r0-eval expr #:in [input ""])
+  (define e
+    `(let ([read
+            (let ([read-stream (open-input-string ,input)])
+              (λ () (read read-stream)))])
+       ,expr))
+  (eval e))
+
+(define (expected? expr #:in [in-str ""])
+  (define eval-res (r0-eval expr #:in in-str))
+  (define asm-res (compile/run expr #:in in-str))
+  (equal? eval-res asm-res))
+
+(struct test-case (expr result in-str) #:transparent)
+
+(define (tc expr result [in-str ""])
+  (test-case expr result in-str))
+
+(define (run-test tst)
+  (match-define (test-case expr result in-str) tst)
+  (equal? (compile/run expr #:in in-str) result))
+
+(define test-cases
+  (list
+   (tc #t #t)
+   (tc #f #f)
+   (tc 0 0)
+   (tc '(+ 1 2) 3)
+   (tc '(- 5) -5)
+   ))
+
+(define (run-all-tests)
+  (for-each
+   (λ (t)
+     (match-define (test-case expr result in-str) t)
+     (define expr-res (compile/run expr #:in in-str))
+     (unless (equal? expr-res result)
+       (display
+        (format "Test for ~a failed with value ~a (expected ~a)\n"
+                expr expr-res result) 
+        (current-error-port))))
+   test-cases))
+
 
 #;
 (define test-expr
@@ -887,7 +761,7 @@
 (define test-expr
   '(if (let ([x 5] [y 4]) (> x y)) 42 90))
 
-#;
+
 (define test-expr
   '(= 3 (- 4 1)))
 
@@ -898,7 +772,7 @@
        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
-
+#;
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
@@ -927,4 +801,4 @@
 
 
 
-(compile-and-run test-expr)
+(compile/run test-expr #:in "")
