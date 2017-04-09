@@ -40,6 +40,18 @@
        (define ty-subs (map recur subexprs))
        (ht (cons 'begin ty-subs)
            (ht-T (last ty-subs)))]
+      ; collect (internal to compiler only)
+      [`(collect ,arg)
+       (define ty-arg (recur arg))
+       (unless (eq? (ht-T ty-arg) 'Integer)
+         (error (fmt-type-error arg 'Integer expr)))
+       (ht `(collect ,ty-arg) 'Void)]
+      ; allocate (internal to compiler only)
+      [`(allocate ,tys)
+       (ht expr (cons 'Vector tys))]
+      ; global (internal to compiler only)
+      [`(global ,(? string?))
+       (ht expr 'Integer)]
       ; unary negation
       [`(- ,arg)
        (define ty-arg (recur arg))
@@ -122,6 +134,8 @@
           (ht `(vector-set! ,ty-vec ,i ,ty-arg)
               'Void)]
          [else (error (format "typeof: vector-set! expects a Vector, not ~a" vec))])]
+      ; if already a has-type, no work required.
+      [(? ht?) expr]
       ; error
       [else (error "invalid expression:" expr)]
       )))
