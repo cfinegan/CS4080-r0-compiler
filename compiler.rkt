@@ -139,7 +139,7 @@
           (λ (pr out)
             (match-define (program out-vars (list out-stmts ...)) out)
             (match-define (program pr-vars (list pr-stmts ... (return-stmt pr-ans))) pr)
-            (program (hash-union out-vars pr-vars)
+            (program (hash-union out-vars pr-vars #:combine/key combine-var-keys)
                      (append pr-stmts out-stmts)))
           (program #hash() empty)
           subexpr-progs))
@@ -217,7 +217,50 @@
                             (cons dest-name T))))
                     #:combine/key combine-var-keys)
         (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
-                                      (return-stmt dest-name))))])))
+                                      (return-stmt dest-name))))]
+      ; vector-ref
+      [`(vector-ref ,vec ,i)
+       (match-define (program vars (list stmts ... (return-stmt ans)))
+         (flatten-code vec vartab))
+       (define dest-name (next-tmp-name))
+       (program
+        (hash-union vars (make-immutable-hash (list (cons dest-name T)))
+                    #:combine/key combine-var-keys)
+        (append stmts (list (assign-stmt `(vector-ref ,ans ,i) dest-name)
+                            (return-stmt dest-name))))]
+      ; vector-set!
+      [`(vector-set! ,vec ,i ,arg)
+       (match-define (program vec-vars (list vec-stmts ... (return-stmt vec-ans)))
+         (flatten-code vec vartab))
+       (match-define (program arg-vars (list arg-stmts ... (return-stmt arg-ans)))
+         (flatten-code arg vartab))
+       (define void-return-name (next-tmp-name))
+       (program
+        (hash-union vec-vars arg-vars
+                    (make-immutable-hash (list (cons void-return-name 'Void)))
+                    #:combine/key combine-var-keys)
+        (append vec-stmts arg-stmts
+                (list (assign-stmt `(vector-set! ,vec-ans ,i ,arg-ans) void-return-name)
+                            (return-stmt void-return-name))))]
+      ; global value
+      [`(global ,(? string?))
+       (define dest-name (next-tmp-name))
+       (program (make-immutable-hash (list (cons dest-name T)))
+                (list (assign-stmt e dest-name)
+                      (return-stmt dest-name)))]
+      ; collect expression
+      [`(collect ,bytes)
+       (define void-return-name (next-tmp-name))
+       (program (make-immutable-hash (list (cons void-return-name 'Void)))
+                (list (assign-stmt e void-return-name)
+                      (return-stmt void-return-name)))]
+      ; allocate expression
+      [`(allocate ,tys ...)
+       (define dest-name (next-tmp-name))
+       (program (make-immutable-hash (list (cons dest-name T)))
+                (list (assign-stmt e dest-name)
+                      (return-stmt dest-name)))]
+      )))
 
 
 (struct int (val) #:transparent)
@@ -866,6 +909,7 @@
              (- b a)
              (- a b)))))
 
+#;
 (define test-expr
   '(let ([a 5] [b (= 3 3)])
      (if b a 3)))
@@ -883,7 +927,7 @@
          a
          b)))
 
-#;
+
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
@@ -898,10 +942,9 @@
 ;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
 
 
-(expose-alloc (typeof (uniquify test-expr)))
-
-
-(flatten-code (expose-alloc (typeof (uniquify test-expr))))
+(define exposed-expr (expose-alloc (typeof (uniquify test-expr))))
+exposed-expr
+(flatten-code exposed-expr)
 
 
 #;
