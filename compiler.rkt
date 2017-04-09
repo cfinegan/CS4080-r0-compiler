@@ -1,6 +1,7 @@
 #lang racket
 
 (require
+  racket/hash
   graph
   "types.rkt"
   "uniquify.rkt"
@@ -94,110 +95,129 @@
 ;;; flatten-code
 ;;; Flattens an expression into a series of statements which only reference integers
 ;;; or variable names.
+
 (define (flatten-code expr)
   
-  ;; Always returns the 'next' temporary name. Encapsulates mutable state.
   (define next-tmp-name
     (let ([next-id -1])
       (λ ()
         (set! next-id (add1 next-id))
         (string->symbol (string-append "tmp." (number->string next-id))))))
   
-  ;; Self-executing closure around helper procedures prevents recursive calls to flatten-code
-  ;; from resetting the tmp-name count.
+  (define (combine-var-keys k a b)
+    (unless (equal? a b)
+      (error (format "non-equal values for key ~a: ~a and ~a" k a b)))
+    a)
+           
   (let flatten-code ([expr expr] [vartab #hash()])
-    (match expr
+    (match-define (ht e T) expr)
+    (match e
+      ; primitive
       [(? (or/c integer? boolean?))
-       (program empty (list (return-stmt expr)))]
+       (program #hash() (list (return-stmt e)))]
+      ; symbol
       [(? symbol?)
-       (define name-ref (hash-ref vartab expr #f))
+       (define name-ref (hash-ref vartab e #f))
        (if name-ref
            (flatten-code name-ref vartab)
-           (program (list expr) (list (return-stmt expr))))]
-      ;; read expression
-      [`(read)
+           (program #; #hash((e . T)) (make-immutable-hash (list (cons e T)))
+                    (list (return-stmt e))))] ; TODO: should we crash if we cant find in table?
+      ; read expression
+      ['(read)
        (define dest-name (next-tmp-name))
-       (program (list dest-name) (list (assign-stmt 'read dest-name)
-                                       (return-stmt dest-name)))]
-      ;; void expression
+       (program (make-immutable-hash (list (cons dest-name T)))
+                (list (assign-stmt 'read dest-name)
+                      (return-stmt dest-name)))]
+      ; void expression
       ['(void)
-       (program empty (list (return-stmt 1)))]
-      ;; begin expression
+       (program #hash() (list (return-stmt 1)))]
+      ; begin expression
       [`(begin ,subexprs ..1)
        (define subexpr-progs (map (λ (e) (flatten-code e vartab)) subexprs))
        (define se-prog
          (foldr
           (λ (pr out)
-            (match-define (program (list out-vars ...) (list out-stmts ...)) out)
-            (match-define (program (list pr-vars ...) (list pr-stmts ... (return-stmt pr-ans))) pr)
-            (program (set-union out-vars pr-vars)
+            (match-define (program out-vars (list out-stmts ...)) out)
+            (match-define (program pr-vars (list pr-stmts ... (return-stmt pr-ans))) pr)
+            (program (hash-union out-vars pr-vars)
                      (append pr-stmts out-stmts)))
-          (program empty empty)
+          (program #hash() empty)
           subexpr-progs))
        (program (program-vars se-prog)
                 (append (program-stmts se-prog) (list (last (program-stmts (last subexpr-progs))))))]
-      ;; let expression
+      ; let expression
       [`(let (,(? let-var? vars) ...) ,subexpr)
        (define-values (next-vartab var-prog)
-         (for/fold ([vartab vartab] [var-prog (program empty empty)])
+         (for/fold ([vartab vartab] [var-prog (program #hash() empty)])
                    ([var vars])
            (define var-name (first var))
            (define var-expr (second var))
-           (match-define (program (list vars ...) (list stmts ... (return-stmt ans)))
+           (match-define (program vars (list stmts ... (return-stmt ans)))
              (flatten-code var-expr vartab))
-           (values (hash-set vartab var-name ans)
-                   (program (set-union (program-vars var-prog) vars)
+           (values (hash-set vartab var-name (ht ans (ht-T var-expr)))
+                   (program (hash-union (program-vars var-prog) vars)
                             (append (program-stmts var-prog) stmts)))))
        (define subexpr-prog (flatten-code subexpr next-vartab))
-       (program (set-union (program-vars var-prog) (program-vars subexpr-prog))
+       (program (hash-union (program-vars var-prog)
+                            (program-vars subexpr-prog)
+                            #:combine/key combine-var-keys)
                 (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
-      ;; if expression
-      [`(if ,cond ,then ,otherwise)       
+      ; if expression
+      [`(if ,cond ,then ,else)
        (define cond-expr
          (match cond
-           [(? (or/c symbol? boolean?))
+           [(ht (? (or/c symbol? boolean?)) 'Boolean)
             ; literal is on RHS so that it will be on LHS in cmp operation.
-            `(= ,(flatten-code cond vartab) ,(flatten-code 1 vartab))]
-           [`(,op ,exp1 ,exp2)
+            `(= ,(flatten-code cond vartab) ,(flatten-code (ht #t 'Boolean) vartab))]
+           [(ht `(,op ,exp1 ,exp2) 'Boolean)
             `(,op ,(flatten-code exp1 vartab) ,(flatten-code exp2 vartab))]))
        (match-define
-         (list
-          cond-op
-          (program (list ce1-vars ...) (list ce1-stmts ... (return-stmt ce1-ans)))
-          (program (list ce2-vars ...) (list ce2-stmts ... (return-stmt ce2-ans))))
+         (list cond-op
+               (program ce1-vars (list ce1-stmts ... (return-stmt ce1-ans)))
+               (program ce2-vars (list ce2-stmts ... (return-stmt ce2-ans))))
          cond-expr)
-       (match-define (program (list then-vars ...) (list then-stmts ... (return-stmt then-ans)))
+       (match-define (program then-vars (list then-stmts ... (return-stmt then-ans)))
          (flatten-code then vartab))
-       (match-define (program (list otherwise-vars ...) (list otherwise-stmts ... (return-stmt otherwise-ans)))
-         (flatten-code otherwise vartab))
+       (match-define (program else-vars (list else-stmts ... (return-stmt else-ans)))
+         (flatten-code else vartab))
        (define dest-name (next-tmp-name))
-       (program (set-union ce1-vars ce2-vars then-vars otherwise-vars (list dest-name))
-                (append ce1-stmts
-                        ce2-stmts
-                        (list (if-stmt
-                               ;(return-stmt cond-ans) ; note cond is not a list of statements
-                               `(,cond-op ,ce1-ans ,ce2-ans)
-                               (append then-stmts (list (assign-stmt then-ans dest-name)))
-                               (append otherwise-stmts (list (assign-stmt otherwise-ans dest-name))))
-                              (return-stmt dest-name))))]
-      ;; arithmetic negation / binary negation
+       (program
+        (hash-union (make-immutable-hash (list (cons dest-name T)))
+                    ce1-vars ce2-vars then-vars else-vars
+                    #:combine/key combine-var-keys)
+        (append ce1-stmts
+                ce2-stmts
+                (list (if-stmt
+                       `(,cond-op ,ce1-ans ,ce2-ans)
+                       (append then-stmts (list (assign-stmt then-ans dest-name)))
+                       (append else-stmts (list (assign-stmt else-ans dest-name))))
+                      (return-stmt dest-name))))]
+      ; arithmetic negation / binary negation
       [`(,(? (λ (op) (or (eq? op '-) (eq? op 'not))) op) ,subexpr)
-       (match-define (program (list vars ...)  (list stmts ... (return-stmt ans)))
+       (match-define (program vars (list stmts ... (return-stmt ans)))
          (flatten-code subexpr vartab))
        (define dest-name (next-tmp-name))
-       (program (set-union (list dest-name) vars)
+       (program (hash-union vars (make-immutable-hash (list (cons dest-name T))))
                 (append stmts (list (assign-stmt `(,op ,ans) dest-name)
                                     (return-stmt dest-name))))]
-      ;; binary arithmetic / boolean operators
+      ; binary arithmetic / boolean operators
       [`(,(? (or/c boolean-op? arith-op?) op) ,L ,R)
-       (match-define (program (list L-vars ...) (list L-stmts ... (return-stmt L-ans)))
+       (match-define (program L-vars (list L-stmts ... (return-stmt L-ans)))
          (flatten-code L vartab))
-       (match-define (program (list R-vars ...) (list R-stmts ... (return-stmt R-ans)))
+       (match-define (program R-vars (list R-stmts ... (return-stmt R-ans)))
          (flatten-code R vartab))
        (define dest-name (next-tmp-name))
-       (program (filter symbol? (set-union L-vars R-vars (list L-ans R-ans dest-name)))
-                (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
-                                              (return-stmt dest-name))))])))
+       (program
+        (hash-union L-vars R-vars
+                    (make-immutable-hash
+                     (filter
+                      (λ (p) (symbol? (car p)))
+                      (list (cons L-ans (ht-T L))
+                            (cons R-ans (ht-T R))
+                            (cons dest-name T))))
+                    #:combine/key combine-var-keys)
+        (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
+                                      (return-stmt dest-name))))])))
 
 
 (struct int (val) #:transparent)
@@ -215,7 +235,8 @@
 ;;;
 ;;; select-insts
 (define (select-insts prog)
-  (match-define (program vars stmts) prog)
+  (match-define (program hash-vars stmts) prog)
+  (define vars (hash-keys hash-vars))
   
   (define (arg->val arg)
     (match arg
@@ -692,7 +713,7 @@
   (define u-expr (uniquify (replace-syntax expr)))
   (define typed-expr (typeof u-expr))
   (define return-type (ht-T typed-expr))
-  (define C-stmts (uncover-live (select-insts (flatten-code u-expr))))
+  (define C-stmts (uncover-live (select-insts (flatten-code typed-expr))))
   (define X-insts (patch-insts (lower-conds (assign-homes C-stmts))))
   (print-asm X-insts return-type))
 
@@ -832,7 +853,7 @@
        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
          (+ w (- x (+ a 2)))))))
 
-
+#;
 (define test-expr
   '(if (<= 1 2) (+ 1 2) (- 3 2)))
 
@@ -844,6 +865,23 @@
          (if (< a b)
              (- b a)
              (- a b)))))
+
+(define test-expr
+  '(let ([a 5] [b (= 3 3)])
+     (if b a 3)))
+
+#;
+(define test-expr
+  '(if (= (read) (read))
+       123456
+       (+ 2 3)))
+
+#;
+(define test-expr
+  '(let ([a 5] [b 10])
+     (if (> a b)
+         a
+         b)))
 
 #;
 (define test-expr
@@ -858,6 +896,12 @@
 ;(select-insts (flatten-code (uniquify test-expr)))
 ;(newline)(newline)
 ;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+
+
+(expose-alloc (typeof (uniquify test-expr)))
+
+
+(flatten-code (expose-alloc (typeof (uniquify test-expr))))
 
 
 #;
