@@ -155,7 +155,8 @@
            (match-define (program vars (list stmts ... (return-stmt ans)))
              (flatten-code var-expr vartab))
            (values (hash-set vartab var-name (ht ans (ht-T var-expr)))
-                   (program (hash-union (program-vars var-prog) vars)
+                   (program (hash-union (program-vars var-prog) vars
+                                        #:combine/key combine-var-keys)
                             (append (program-stmts var-prog) stmts)))))
        (define subexpr-prog (flatten-code subexpr next-vartab))
        (program (hash-union (program-vars var-prog)
@@ -269,14 +270,41 @@
 
 (struct reg (name) #:transparent)
 
+(struct global (name) #:transparent)
+
 (struct unary-inst (op arg) #:transparent)
 
 (struct binary-inst (op src dest) #:transparent)
 
 (struct xprogram (vars insts live-afters) #:transparent)
 
+(define arg-registers (vector-map reg #(rdi rsi rdx rcx r8 r9)))
+
+(define root-stack (reg 'r15))
+
 ;;;
 ;;; select-insts
+;;;
+(define (types->tag tys)
+  ; tag:
+  ; upper 5 bits are size (0 - 31) => (1 - 32).
+  ; mid 27 bits are empty.
+  ; lower 32 bits are the type tags.
+  ; stores bits so that the lowest-order bit is the first type,
+  ; 2nd-lowest-order bit is the 2nd type, etc.
+  (unless (not (empty? tys))
+    (error "Empty type list is not valid for a vector"))
+  (define tag-bits
+    (for/fold ([tag 0])
+              ([ty (reverse tys)])
+      (if (and (list? ty)
+               (eq? (first ty) 'Vector))
+          (add1 (arithmetic-shift tag 1))
+          (arithmetic-shift tag 1))))
+  (bitwise-ior (arithmetic-shift (sub1 (length tys)) 59)
+               tag-bits))
+
+;; select-insts
 (define (select-insts prog)
   (match-define (program hash-vars stmts) prog)
   (define vars (hash-keys hash-vars))
@@ -293,6 +321,9 @@
       ['+ 'add]
       ['- 'sub]
       [_ (error "invalid arith-op:" op)]))
+
+;  (define SIZE-MASK (arithmetic-shift (string->number "11111" 2) 59))
+;  (define TAGS-MASK (sub1 (expt 2 32)))
   
   (define (stmt->insts stmt)
     (match stmt
@@ -317,7 +348,26 @@
          [(? symbol?)
           (binary-inst 'mov (var src-expr) (var dest))]
          [(? integer?)
-          (binary-inst 'mov (int src-expr) (var dest))])]
+          (binary-inst 'mov (int src-expr) (var dest))]
+         [`(vector-ref ,vec ,i)
+          (list (binary-inst 'mov (arg->val vec) (reg 'rax))
+                (binary-inst 'mov (deref 'rax (* ptr-size (add1 i))) (var dest)))]
+         [`(vector-set! ,vec ,i, arg)
+          (list (binary-inst 'mov (arg->val vec) (reg 'rax))
+                (binary-inst 'mov (arg->val arg) (deref 'rax (* ptr-size (add1 i))))
+                (binary-inst 'mov (int 1) (var dest)))]
+         [`(allocate ,tys ...)
+          (list (binary-inst 'mov (global "free_ptr") (arg->val dest))
+                (binary-inst 'add (* ptr-size (add1 (length tys))) (global "free_ptr"))
+                (binary-inst 'mov (arg->val dest) (reg 'rax))
+                (binary-inst 'mov (int (types->tag tys)) (deref 'rax 0)))]
+         [`(collect ,bytes)
+          (list (binary-inst 'mov root-stack (vector-ref arg-registers 0))
+                (binary-inst 'mov (int bytes) (vector-ref arg-registers 1))
+                (unary-inst 'call "gc_collect"))]
+         [`(global ,name)
+          (binary-inst 'mov (global name) (arg->val dest))]
+         )]
       [(if-stmt `(,cond-op ,L ,R) then-stmts otherwise-stmts)
        (if-stmt
         ; cond
@@ -329,7 +379,7 @@
       [(return-stmt src-val)
        (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
   
-  (xprogram vars (flatten (map stmt->insts stmts)) empty))
+  (xprogram hash-vars (flatten (map stmt->insts stmts)) empty))
 
 
 ;;;
@@ -342,16 +392,6 @@
   
   (define (move-inst? op)
     (set-member? '(mov movzb) op))
-  
-  #; ; TODO: Do we actually need this? right now it's never called, book recommends it.
-  (define (get-vars inst)
-    (filter
-     var?
-     (match inst
-       [(unary-inst op arg)
-        (list arg)]
-       [(binary-inst op arg1 arg2)
-        (list arg1 arg2)])))
   
   (define (get-reads inst)
     (filter
@@ -435,8 +475,8 @@
 ;;; build-interference
 ;;;
 ;; Note: %rax omitted because it's used by compiler as scratch.
-(define caller-saved '(rcx rdx r8 r9 r10 r11))
-(define callee-saved '(rbx rbp rdi rsi rsp r12 r13 r14 r15))
+(define caller-saved '(rcx rdx rdi rsi r8 r9 r10 r11))
+(define callee-saved '(rbx rbp rsp r12 r13 r14 r15))
 
 (define (build-interference xprog)
   
@@ -483,7 +523,8 @@
 (struct deref (reg amount) #:transparent)
 (struct xxprogram (stack-size insts) #:transparent)
 
-(define alloc-registers #(rbx rdi rsi r12 r13 r14 r15 ;; callee-saved
+;; note: r15 is used for root stack, not for allocation
+(define alloc-registers #(rbx rdi rsi r12 r13 r14 ;; callee-saved
                               rcx rdx r8 r9 r10 r11 ;; caller-saved
                               ))
 
@@ -715,9 +756,13 @@
 
   (define print-call
     (string-append
+     (fmt-asm "pushq" "%rdi")
+     (fmt-asm "pushq" "%rsi")
      (fmt-asm "movq" "%rax" "%rdi")
      (fmt-asm "movq" (int->asm (type->int ty)) "%rsi")
-     (fmt-asm "callq" (fmt-label "write_any"))))
+     (fmt-asm "callq" (fmt-label "write_any"))
+     (fmt-asm "popq" "%rsi")
+     (fmt-asm "popq" "%rdi")))
   
   (define stack-suffix
     (string-append
@@ -808,49 +853,78 @@
 ;;; TESTS
 ;;;
 
+;; namespace anchor
+(define r0-ns (make-base-namespace))
+
 (define (r0-eval expr #:in [input ""])
-  (define e
-    `(let ([read
-            (let ([read-stream (open-input-string ,input)])
-              (λ () (read read-stream)))])
-       ,expr))
-  (eval e))
+  (parameterize ([current-input-port (open-input-string input)])
+    (eval expr r0-ns)))
 
 (define (expected? expr #:in [in-str ""])
   (define eval-res (r0-eval expr #:in in-str))
   (define asm-res (compile/run expr #:in in-str))
   (equal? eval-res asm-res))
 
-(struct test-case (expr result in-str) #:transparent)
-
-(define (tc expr result [in-str ""])
-  (test-case expr result in-str))
-
-(define (run-test tst)
-  (match-define (test-case expr result in-str) tst)
-  (equal? (compile/run expr #:in in-str) result))
+(struct tc (expr in-str) #:transparent)
 
 (define test-cases
-  (list
-   (tc #t #t)
-   (tc #f #f)
-   (tc 0 0)
-   (tc '(+ 1 2) 3)
-   (tc '(- 5) -5)
-   ))
+  `(#t
+    #f
+    0
+    1
+    -1
+    (- 1)
+    ,(tc '(read) "40")
+    (+ 21 55)
+    ,(tc '(+ (read) (read)) "20 4")
+    (- 128 12)
+    (let ([x 5] [y 6]) (+ x y))
+    ,(tc '(let ([x (read)] [y (read)]) (+ x y)) "5 6")
+    (= 0 0)
+    (= 5 40)
+    (not #t)
+    (not #f)
+    (not (= 1 0))
+    (< 1 2)
+    (< 2 1)
+    (<= 1 2)
+    (<= 2 2)
+    (<= 2 1)
+    (> 1 2)
+    (> 2 1)
+    (>= 1 2)
+    (>= 1 1)
+    (>= 2 1)
+    (if #t 500 60)
+    (if #f 120 6)
+    (if (= 0 1) 50 1)
+    (if (= 20 20) (+ 1 2) 4000)
+    ,(tc '(if (= (read) (read)) 1 2) "20 100")
+    (if (not (= 50 1)) 2 3)
+    (if (not (= 2 1)) (if (>= 4 5) 501 502) 503)
+    ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 5")
+    ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 10")
+    (let ([x (+ 2 3)] [y (- 5)] [a 55])
+     (let ([x (- x y)] [z (+ x y)])
+       (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
+         (+ w (- x (+ a 2))))))
+    ))
 
 (define (run-all-tests)
   (for-each
-   (λ (t)
-     (match-define (test-case expr result in-str) t)
-     (define expr-res (compile/run expr #:in in-str))
-     (unless (equal? expr-res result)
-       (display
-        (format "Test for ~a failed with value ~a (expected ~a)\n"
-                expr expr-res result) 
-        (current-error-port))))
+   (λ (test)
+     (display test) (newline)
+     (match test
+       [(tc expr in-str)
+        (unless (expected? expr #:in in-str)
+          (display (format "failed test: ~a with input: ~a\n" expr in-str)))]
+       [_
+        (unless (expected? test)
+          (display (format "failed test: ~a\n" test)))]))
    test-cases))
 
+
+(run-all-tests)
 
 #;
 (define test-expr
@@ -911,10 +985,15 @@
 
 #;
 (define test-expr
+  '(let ([a (read)] [b (read)])
+     (= a b)))
+
+#;
+(define test-expr
   '(let ([a 5] [b (= 3 3)])
      (if b a 3)))
 
-#;
+
 (define test-expr
   '(if (= (read) (read))
        123456
@@ -927,25 +1006,16 @@
          a
          b)))
 
-
+#;
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
 
-;(lower-conds (assign-homes (uncover-live (select-insts (flatten-code (uniquify test-expr))))))
-;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
+;(define flat-code (flatten-code (expose-alloc (typeof (uniquify test-expr)))))
+;flat-code
 ;(newline)
-;(display (expr->asm test-expr))
-
-;(select-insts (flatten-code (uniquify test-expr)))
-;(newline)(newline)
-;(uncover-live (select-insts (flatten-code (uniquify test-expr))))
-
-
-(define exposed-expr (expose-alloc (typeof (uniquify test-expr))))
-exposed-expr
-(flatten-code exposed-expr)
+;(select-insts flat-code)
 
 
 #;
-(compile/run test-expr #:in "")
+(compile/run test-expr #:in "10 10")

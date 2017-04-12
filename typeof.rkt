@@ -2,11 +2,9 @@
 
 (require "types.rkt")
 
+;contract-out
 (provide
- ht
- ht-e
- ht-T
- ht?
+ (struct-out ht)
  typeof)
 
 (struct ht (e T) #:transparent)
