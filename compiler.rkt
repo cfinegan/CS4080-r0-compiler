@@ -1,152 +1,18 @@
 #lang racket
 
 (require
-  racket/hash
   graph
   "types.rkt"
   "uniquify.rkt"
   "typeof.rkt"
   "flatten.rkt"
-  "expose.rkt")
-
-(define (replace-syntax expr)
-  (define r replace-syntax)
-  (define (var-args-op? op)
-    (set-member? '(+ - * or and) op))
-  (match expr
-    ; or
-    [`(or ,arg1 ,arg2)
-     `(let ([or.tmp ,(r arg1)])
-        (if or.tmp or.tmp ,(r arg2)))]
-    ; and
-    [`(and ,arg1 ,arg2)
-     `(if ,(r arg1) ,(r arg2) #f)]
-    ; optimize conditionals
-    [`(if ,cond ,then ,ow)
-     (match cond
-       [#t (r then)]
-       [#f (r ow)]
-       [`(not ,subexpr)
-        `(if ,(r subexpr) ,(r ow) ,(r then))]
-       [_ `(if ,(r cond) ,(r then) ,(r ow))])]
-    ; Breaks var-args into 'pyramid' of calls
-    [`(,(? var-args-op? op) ,arg1 ,args ..2)
-     `(,op ,(r arg1) ,(r (cons op args)))]
-    ; Recursively call self on nested calls.
-    [(? list?)
-     (map r expr)]
-    ; Default
-    [_ expr]))
-
-(define arg-registers (vector-map reg #(rdi rsi rdx rcx r8 r9)))
-
-(define root-stack (reg 'r15))
-
-;;;
-;;; select-insts
-;;;
-(define (types->tag tys)
-  ; tag:
-  ; upper 5 bits are size (0 - 31) => (1 - 32).
-  ; mid 27 bits are empty.
-  ; lower 32 bits are the type tags.
-  ; stores bits so that the lowest-order bit is the first type,
-  ; 2nd-lowest-order bit is the 2nd type, etc.
-  (unless (not (empty? tys))
-    (error "Empty type list is not valid for a vector"))
-  (define tag-bits
-    (for/fold ([tag 0])
-              ([ty (reverse tys)])
-      (if (and (list? ty)
-               (eq? (first ty) 'Vector))
-          (add1 (arithmetic-shift tag 1))
-          (arithmetic-shift tag 1))))
-  (bitwise-ior (arithmetic-shift (sub1 (length tys)) 59)
-               tag-bits))
-
-;; select-insts
-(define (select-insts prog)
-  (match-define (program hash-vars stmts) prog)
-  (define vars (hash-keys hash-vars))
-  
-  (define (arg->val arg)
-    (match arg
-      [(? integer?) (int arg)]
-      [(? boolean?) (int (if arg 1 0))]
-      [(? symbol?) (var arg)]
-      [_ (error "invalid arg:" arg)]))
-  
-  (define (arith-name op)
-    (match op
-      ['+ 'add]
-      ['- 'sub]
-      [_ (error "invalid arith-op:" op)]))
-
-;  (define SIZE-MASK (arithmetic-shift (string->number "11111" 2) 59))
-;  (define TAGS-MASK (sub1 (expt 2 32)))
-  
-  (define (stmt->insts stmt)
-    (match stmt
-      [(assign-stmt src-expr (? symbol? dest))
-       (match src-expr
-         [`(- ,arg)
-          (list (binary-inst 'mov (arg->val arg) (var dest))
-                (unary-inst 'neg (var dest)))]
-         [`(,(? arith-op? op) ,arg1 ,arg2)
-          (list (binary-inst 'mov (arg->val arg1) (var dest))
-                (binary-inst (arith-name op) (arg->val arg2) (var dest)))]
-         [`(not ,arg)
-          (list (binary-inst 'mov (arg->val arg) (var dest))
-                (binary-inst 'xor (int 1) (var dest)))]
-         [`(,(? boolean-op? op) ,arg1 ,arg2)
-          ; x86_64 cmp is reversed, LHS of expr goes in RHS of inst.
-          (list (binary-inst 'cmp (arg->val arg2) (arg->val arg1))
-                (unary-inst `(set ,op) (var dest)))]
-         ['read
-          (list (unary-inst 'call "read_int")
-                (binary-inst 'mov (reg 'rax) (var dest)))]
-         [(? symbol?)
-          (binary-inst 'mov (var src-expr) (var dest))]
-         [(? integer?)
-          (binary-inst 'mov (int src-expr) (var dest))]
-         [`(vector-ref ,vec ,i)
-          (list (binary-inst 'mov (arg->val vec) (reg 'rax))
-                (binary-inst 'mov (deref 'rax (* ptr-size (add1 i))) (var dest)))]
-         [`(vector-set! ,vec ,i, arg)
-          (list (binary-inst 'mov (arg->val vec) (reg 'rax))
-                (binary-inst 'mov (arg->val arg) (deref 'rax (* ptr-size (add1 i))))
-                (binary-inst 'mov (int 1) (var dest)))]
-         [`(allocate ,tys ...)
-          (list (binary-inst 'mov (global "free_ptr") (arg->val dest))
-                (binary-inst 'add (* ptr-size (add1 (length tys))) (global "free_ptr"))
-                (binary-inst 'mov (arg->val dest) (reg 'rax))
-                (binary-inst 'mov (int (types->tag tys)) (deref 'rax 0)))]
-         [`(collect ,bytes)
-          (list (binary-inst 'mov root-stack (vector-ref arg-registers 0))
-                (binary-inst 'mov (int bytes) (vector-ref arg-registers 1))
-                (unary-inst 'call "gc_collect"))]
-         [`(global ,name)
-          (binary-inst 'mov (global name) (arg->val dest))]
-         )]
-      [(if-stmt `(,cond-op ,L ,R) then-stmts otherwise-stmts)
-       (if-stmt
-        ; cond
-        `(,cond-op ,(arg->val L) ,(arg->val R))
-        ; then
-        (flatten (map stmt->insts then-stmts))
-        ; otherwise
-        (flatten (map stmt->insts otherwise-stmts)))]
-      [(return-stmt src-val)
-       (binary-inst 'mov (arg->val src-val) (reg 'rax))]))
-  
-  (xprogram hash-vars (flatten (map stmt->insts stmts)) empty))
-
+  "expose.rkt"
+  "select-insts.rkt"
+  "replace-syntax.rkt")
 
 ;;;
 ;;; uncover-live
 ;;;
-(struct if-stmt/lives (cond then then-lives ow ow-lives) #:transparent)
-
 (define (uncover-live xprog)
   (match-define (xprogram vars all-insts emtpy) xprog)
   
@@ -278,7 +144,6 @@
   
   graph)
 
-(struct deref (reg amount) #:transparent)
 (struct xxprogram (stack-size insts) #:transparent)
 
 ;; note: r15 is used for root stack, not for allocation
@@ -289,6 +154,9 @@
 
 (define current-register-max
   (make-parameter (vector-length alloc-registers)))
+
+(define verbose-output?
+  (make-parameter #t))
 
 ;;;
 ;;; assign-homes
@@ -301,9 +169,6 @@
   
   (define interference (build-interference xprog))
 
-  #;
-  (define num-valid-registers (vector-length alloc-registers))
-
   (define num-valid-registers (current-register-max))
   
   (define (color->home color)
@@ -313,14 +178,14 @@
   
   (define-values (num-colors colorings)
     (coloring/greedy interference))
-  
-  (display "num colors: ") (display num-colors) (newline)
-  
+
   (define spill-count (max 0 (- num-colors num-valid-registers)))
   (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
   
-  (display "spill count: ") (display spill-count) (newline)
-  (display "stack size: ") (display stack-size) (newline)
+  (unless (not (verbose-output?))
+    (display "num colors: ") (display num-colors) (newline)
+    (display "spill count: ") (display spill-count) (newline)
+    (display "stack size: ") (display stack-size) (newline))
   
   (define (get-var-home tok)
     (if (var? tok)
@@ -563,7 +428,7 @@
 ;; Creates an ASM string from an input expression.
 (define (expr->asm expr)
   (define u-expr (uniquify (replace-syntax expr)))
-  (define typed-expr (typeof u-expr))
+  (define typed-expr (expose-alloc (typeof u-expr)))
   (define return-type (ht-T typed-expr))
   (define C-stmts (uncover-live (select-insts (flatten-code typed-expr))))
   (define X-insts (patch-insts (lower-conds (assign-homes C-stmts))))
@@ -575,7 +440,8 @@
   (define out-file (open-output-file "bin/r0func.s" #:exists 'replace))
   (display asm-str out-file)
   (close-output-port out-file)
-  (system "make"))  
+  (parameterize ([current-output-port (open-output-nowhere)])
+    (system "make")))
   
 
 ;; Runs the current program, optionally taking an input string to send the
@@ -609,7 +475,7 @@
 ;;; TESTS
 ;;;
 
-;; namespace anchor
+; namespace anchor
 (define r0-ns (make-base-namespace))
 
 (define (r0-eval expr #:in [input ""])
@@ -676,7 +542,8 @@
           (display (format "failed test: ~a with input: ~a\n" expr in-str)))]
        [_
         (unless (expected? test)
-          (display (format "failed test: ~a\n" test)))]))
+          (display (format "failed test: ~a\n" test)))])
+     (newline))
    test-cases))
 
 

@@ -2,16 +2,15 @@
 
 (provide (all-defined-out))
 
-(define ptr-size 8)
-
 ;; Returns true if argument is a list in the form expected by the let macro.
 (define (let-var? v)
   (and (list? v) (= 2 (length v))))
 
-;; Some basic sets outlining what operators are valid for what purposes.
+;; Airth ops are operations which expect 2 numbers and return a number.
 (define (arith-op? op)
   (set-member? '(+ -) op))
 
+;; Boolean ops are operations which expect 2 numbers and return a boolean.
 (define (boolean-op? op)
   (set-member? '(= < > <= >=) op))
 
@@ -33,9 +32,19 @@
 (struct var (name) #:transparent)
 (struct reg (name) #:transparent)
 (struct global (name) #:transparent)
+(struct deref (reg amount) #:transparent)
 
-;; instructions are associated with an xprogram
-;; note: xprograms can also hold 'if-stmt' and 'if-stmt/lives' types
+;; if-stmt/lives is used by uncover-live to store extra liveness info,
+;; but is discarded by assign-homes, which uses if-stmt.
+(struct if-stmt/lives (cond then then-lives ow ow-lives) #:transparent)
+
+;; instructions are associated with an xprogram, with the exception
+;; of if-stmt and if-stmt/lives, which are not lowered until lower-conds.
 (struct unary-inst (op arg) #:transparent)
 (struct binary-inst (op src dest) #:transparent)
 (struct xprogram (vars insts live-afters) #:transparent)
+
+;; global constants
+(define ptr-size 8)
+(define root-stack (reg 'r15))
+(define arg-registers (vector-map reg #(rdi rsi rdx rcx r8 r9)))
