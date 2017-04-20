@@ -3,11 +3,7 @@
 (require "types.rkt")
 
 ;contract-out
-(provide
- (struct-out ht)
- typeof)
-
-(struct ht (e T) #:transparent)
+(provide typeof)
 
 (define (typeof expr)
   (define (fmt-type-error arg expected-type expr)
