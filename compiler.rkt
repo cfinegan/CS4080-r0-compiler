@@ -6,7 +6,8 @@
   "types.rkt"
   "uniquify.rkt"
   "typeof.rkt"
-  "flatten.rkt")
+  "flatten.rkt"
+  "expose.rkt")
 
 (define (replace-syntax expr)
   (define r replace-syntax)
@@ -36,59 +37,6 @@
      (map r expr)]
     ; Default
     [_ expr]))
-
-
-;;;
-;;; expose-alloc
-;;;
-(define (expose-alloc expr)
-  (define next-arg-name
-    (let ([next-id -1])
-      (λ ()
-        (set! next-id (add1 next-id))
-        (string->symbol (string-append "vec" (number->string next-id))))))
-  (let expose ([expr expr])
-    (match expr
-      [(ht `(vector ,args ...) `(Vector ,tys ...))
-       (define bytes (* (length tys) ptr-size))
-       (define arg-names (map (λ (_) (next-arg-name)) args))
-       (typeof
-        (for/fold
-         ([body
-           `(begin
-              (if
-               (< (+ (global "free_ptr") ,bytes)
-                  (global "fromspace_end"))
-               (void)
-               (collect ,bytes))
-              (let ([vec (allocate ,tys)])
-                ,(cons
-                  'begin
-                  (foldr
-                   (λ (i out)
-                     (cons `(vector-set! vec ,i ,(list-ref arg-names i)) out))
-                   (list 'vec)
-                   (range 0 (length tys))))))])
-         ([x arg-names] [e args])
-          `(let ([,x ,(expose e)]) ,body)))]
-      [(ht (? list? e) T)
-       (ht (map expose e) T)]
-      [_ expr])))
-
-
-(struct int (val) #:transparent)
-
-(struct var (name) #:transparent)
-
-(struct reg (name) #:transparent)
-
-(struct global (name) #:transparent)
-
-(struct unary-inst (op arg) #:transparent)
-
-(struct binary-inst (op src dest) #:transparent)
-
-(struct xprogram (vars insts live-afters) #:transparent)
 
 (define arg-registers (vector-map reg #(rdi rsi rdx rcx r8 r9)))
 
@@ -330,8 +278,6 @@
   
   graph)
 
-
-(define ptr-size 8)
 (struct deref (reg amount) #:transparent)
 (struct xxprogram (stack-size insts) #:transparent)
 
@@ -578,13 +524,9 @@
 
   (define print-call
     (string-append
-     (fmt-asm "pushq" "%rdi")
-     (fmt-asm "pushq" "%rsi")
      (fmt-asm "movq" "%rax" "%rdi")
      (fmt-asm "movq" (int->asm (type->int ty)) "%rsi")
-     (fmt-asm "callq" (fmt-label "write_any"))
-     (fmt-asm "popq" "%rsi")
-     (fmt-asm "popq" "%rdi")))
+     (fmt-asm "callq" (fmt-label "write_any"))))
   
   (define stack-suffix
     (string-append
