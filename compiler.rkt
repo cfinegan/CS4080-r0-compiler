@@ -41,24 +41,24 @@
         [(binary-inst 'mov src (? var? dest))
          (for ([var l-after])
            (unless (or (equal? var dest) (equal? var src))
-             (add-edge! graph (var-name dest) (var-name var))))]
+             (add-edge! graph dest var)))]
         ;; all other binary-instructions
         [(binary-inst op src (? var? dest))
          (for ([var l-after])
            (unless (equal? var dest)
-             (add-edge! graph (var-name var) (var-name dest))))]
+             (add-edge! graph var dest)))]
         ;; function call
         [(unary-inst 'call (? string? label))
          ;; always interfere with caller-saves
          (for ([var l-after])
            (for ([reg caller-saved])
-             (add-edge! graph (reg-name reg) (var-name var))))
+             (add-edge! graph reg var)))
          ;; if collecting garbage, vectors interfere with callee-saves
          (unless (not (equal? label "gc_collect"))
            (for ([var l-after])
              (unless (not (vector-ty? (hash-ref (var-name var) vars)))
                (for ([reg callee-saved])
-                 (add-edge! graph (reg-name reg) (var-name var))))))]
+                 (add-edge! graph reg var)))))]
         ;; if statement
         [(if-stmt/lives cond then then-lives ow ow-lives)
          (begin
