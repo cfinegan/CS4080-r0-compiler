@@ -17,6 +17,10 @@
 ;; has-type (expr Type)
 (struct ht (e T) #:transparent)
 
+;; true if input is a vector type descriptor object.
+(define (vector-ty? v)
+  (and (list? v) (eq? (first v) 'Vector)))
+
 ;; exprs after being flattened.
 (struct unary-expr (op arg) #:transparent)
 (struct binary-expr (op src dest) #:transparent)

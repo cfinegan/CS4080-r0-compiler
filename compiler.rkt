@@ -15,8 +15,8 @@
 ;;; build-interference
 ;;;
 ;; Note: %rax omitted because it's used by compiler as scratch.
-(define caller-saved '(rcx rdx rdi rsi r8 r9 r10 r11))
-(define callee-saved '(rbx rbp rsp r12 r13 r14 r15))
+(define caller-saved (map reg '(rcx rdx rdi rsi r8 r9 r10 r11)))
+(define callee-saved (map reg '(rbx rbp rsp r12 r13 r14 r15)))
 
 (define (build-interference xprog)
   
@@ -37,24 +37,38 @@
     (for ([inst insts]
           [l-after live-afters])
       (match inst
+        ;; move instruction
         [(binary-inst 'mov src (? var? dest))
          (for ([var l-after])
            (unless (or (equal? var dest) (equal? var src))
              (add-edge! graph (var-name dest) (var-name var))))]
+        ;; all other binary-instructions
         [(binary-inst op src (? var? dest))
          (for ([var l-after])
            (unless (equal? var dest)
              (add-edge! graph (var-name var) (var-name dest))))]
+        ;; function call
         [(unary-inst 'call (? string? label))
+         ;; always interfere with caller-saves
          (for ([var l-after])
            (for ([reg caller-saved])
-             (add-edge! graph reg (var-name var))))]
+             (add-edge! graph (reg-name reg) (var-name var))))
+         ;; if collecting garbage, vectors interfere with callee-saves
+         (unless (not (equal? label "gc_collect"))
+           (for ([var l-after])
+             (unless (not (vector-ty? (hash-ref (var-name var) vars)))
+               (for ([reg callee-saved])
+                 (add-edge! graph (reg-name reg) (var-name var))))))]
+        ;; if statement
         [(if-stmt/lives cond then then-lives ow ow-lives)
          (begin
            (build-inter then then-lives)
            (build-inter ow ow-lives)
            (void))]
         [else (void)])))
+
+  (for ([e (get-edges graph)])
+    (displayln e))
   
   graph)
 
@@ -117,7 +131,7 @@
           (cons
            (match inst
              [(unary-inst 'call func)
-              (define lives (set-intersect (map get-var-home l-after) (map reg caller-saved)))
+              (define lives (set-intersect (map get-var-home l-after) caller-saved))
               (append (map (λ (var) (unary-inst 'push var)) lives)
                       (if (odd? (length lives))
                           (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
@@ -441,9 +455,9 @@
     ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 5")
     ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 10")
     (let ([x (+ 2 3)] [y (- 5)] [a 55])
-     (let ([x (- x y)] [z (+ x y)])
-       (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
-         (+ w (- x (+ a 2))))))
+      (let ([x (- x y)] [z (+ x y)])
+        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
+          (+ w (- x (+ a 2))))))
     ))
 
 (define (run-all-tests)
@@ -530,7 +544,7 @@
   '(let ([a 5] [b (= 3 3)])
      (if b a 3)))
 
-
+#;
 (define test-expr
   '(if (= (read) (read))
        123456
@@ -543,16 +557,13 @@
          a
          b)))
 
-#;
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
-
-;(define flat-code (flatten-code (expose-alloc (typeof (uniquify test-expr)))))
-;flat-code
-;(newline)
-;(select-insts flat-code)
-
+(define u-expr (uniquify (replace-syntax test-expr)))
+(define typed-expr (expose-alloc (typeof u-expr)))
+(define return-type (ht-T typed-expr))
+(uncover-live (select-insts (flatten-code typed-expr)))
 
 #;
 (compile/run test-expr #:in "10 10")
