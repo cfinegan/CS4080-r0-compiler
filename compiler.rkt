@@ -66,9 +66,6 @@
            (build-inter ow ow-lives)
            (void))]
         [else (void)])))
-
-  (for ([e (get-edges graph)])
-    (displayln e))
   
   graph)
 
@@ -89,14 +86,9 @@
 ;;;
 ;;; assign-homes
 ;;;
-(define (assign-homes xprog)
-  
-  ;; TODO: diagnostic prints: keep or remove?
-  
+(define (assign-homes xprog)  
   (match-define (xprogram vars insts l-afters) xprog)
-  
   (define interference (build-interference xprog))
-
   (define num-valid-registers (current-register-max))
   
   (define (color->home color)
@@ -106,6 +98,8 @@
   
   (define-values (num-colors colorings)
     (coloring/greedy interference))
+
+  (displayln colorings)
 
   (define spill-count (max 0 (- num-colors num-valid-registers)))
   (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
@@ -118,7 +112,7 @@
   (define (get-var-home tok)
     (if (var? tok)
         ;; defaults to zero b/c colorings will be empty in case of no interference.
-        (color->home (hash-ref colorings (var-name tok) 0))
+        (color->home (hash-ref colorings tok 0))
         tok))
   
   (define home-insts
@@ -146,8 +140,7 @@
              [(if-stmt/lives `(,cond-op ,L ,R) then then-afters ow ow-afters)
               (if-stmt `(,cond-op ,(get-var-home L) ,(get-var-home R))
                        (assign-homes then then-afters)
-                       (assign-homes ow ow-afters))]
-             )
+                       (assign-homes ow ow-afters))])
            out))))))
   
   (xxprogram stack-size home-insts))
@@ -449,28 +442,37 @@
     (if #f 120 6)
     (if (= 0 1) 50 1)
     (if (= 20 20) (+ 1 2) 4000)
+    (if (let ([x 5] [y 4]) (> x y)) 42 90)
     ,(tc '(if (= (read) (read)) 1 2) "20 100")
+    (if (= (let ([x 5]) (+ x 0)) 5) (+ 2 3) (- 5))
     (if (not (= 50 1)) 2 3)
     (if (not (= 2 1)) (if (>= 4 5) 501 502) 503)
     ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 5")
     ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 10")
+    ,(tc '(let ([a (read)] [b (read)]) (= a b)) "2 10")
     (let ([x (+ 2 3)] [y (- 5)] [a 55])
       (let ([x (- x y)] [z (+ x y)])
         (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
           (+ w (- x (+ a 2))))))
+    (let ([v 1] [w 46])
+      (let ([x (+ v 7)])
+        (let ([y (+ 4 x)] [z (+ x w)])
+          (+ z (- y)))))
+    (let ([a 5] [b (= 3 3)])
+      (if b a 3))
     ))
 
 (define (run-all-tests)
   (for-each
    (λ (test)
-     (display test) (newline)
+     (displayln test)
      (match test
        [(tc expr in-str)
         (unless (expected? expr #:in in-str)
-          (display (format "failed test: ~a with input: ~a\n" expr in-str)))]
+          (displayln (format "failed test: ~a with input: ~a" expr in-str) (current-error-port)))]
        [_
         (unless (expected? test)
-          (display (format "failed test: ~a\n" test)))])
+          (displayln (format "failed test: ~a" test) (current-error-port)))])
      (newline))
    test-cases))
 
@@ -560,10 +562,10 @@
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
-(define u-expr (uniquify (replace-syntax test-expr)))
-(define typed-expr (expose-alloc (typeof u-expr)))
-(define return-type (ht-T typed-expr))
-(uncover-live (select-insts (flatten-code typed-expr)))
+;(define u-expr (uniquify (replace-syntax test-expr)))
+;(define typed-expr (expose-alloc (typeof u-expr)))
+;(define return-type (ht-T typed-expr))
+;(uncover-live (select-insts (flatten-code typed-expr)))
 
 #;
 (compile/run test-expr #:in "10 10")

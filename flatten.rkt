@@ -30,7 +30,7 @@
        (define name-ref (hash-ref vartab e #f))
        (if name-ref
            (flatten-code name-ref vartab)
-           (program #; #hash((e . T)) (make-immutable-hash (list (cons e T)))
+           (program (make-immutable-hash (list (cons e T)))
                     (list (return-stmt e))))] ; TODO: should we crash if we cant find in table?
       ; read expression
       ['(read)
@@ -80,6 +80,9 @@
            [(ht (? (or/c symbol? boolean?)) 'Boolean)
             ; literal is on RHS so that it will be on LHS in cmp operation.
             `(= ,(flatten-code cond vartab) ,(flatten-code (ht #t 'Boolean) vartab))]
+           ;; TODO: optimize let case to not require 2 cmps
+           [(ht `(let (,(? let-var? vars) ...) ,subexpr) 'Boolean)
+            `(=, (flatten-code cond vartab) ,(flatten-code (ht #t 'Boolean) vartab))]
            [(ht `(,op ,exp1 ,exp2) 'Boolean)
             `(,op ,(flatten-code exp1 vartab) ,(flatten-code exp2 vartab))]))
        (match-define
@@ -170,5 +173,4 @@
        (define dest-name (next-tmp-name))
        (program (make-immutable-hash (list (cons dest-name T)))
                 (list (assign-stmt e dest-name)
-                      (return-stmt dest-name)))]
-      )))
+                      (return-stmt dest-name)))])))
