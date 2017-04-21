@@ -1,10 +1,20 @@
 #lang racket
 
+(provide flatten-code)
+
 (require
   racket/hash
+  kw-utils/partial
   "types.rkt" )
 
-(provide flatten-code)
+(define hash-combine
+  (partial
+   hash-union
+   #:combine/key
+   (λ (k a b)
+     (unless (equal? a b)
+       (error 'hash-combine "non-equal values for key ~a: ~a and ~a" k a b))
+     a)))
 
 (define (flatten-code expr)
   
@@ -13,12 +23,7 @@
       (λ ()
         (set! next-id (add1 next-id))
         (string->symbol (string-append "tmp." (number->string next-id))))))
-  
-  (define (combine-var-keys k a b)
-    (unless (equal? a b)
-      (error (format "non-equal values for key ~a: ~a and ~a" k a b)))
-    a)
-           
+             
   (let flatten-code ([expr expr] [vartab #hash()])
     (match-define (ht e T) expr)
     (match e
@@ -49,7 +54,7 @@
           (λ (pr out)
             (match-define (program out-vars (list out-stmts ...)) out)
             (match-define (program pr-vars (list pr-stmts ... (return-stmt pr-ans))) pr)
-            (program (hash-union out-vars pr-vars #:combine/key combine-var-keys)
+            (program (hash-combine out-vars pr-vars)
                      (append pr-stmts out-stmts)))
           (program #hash() empty)
           subexpr-progs))
@@ -65,13 +70,11 @@
            (match-define (program vars (list stmts ... (return-stmt ans)))
              (flatten-code var-expr vartab))
            (values (hash-set vartab var-name (ht ans (ht-T var-expr)))
-                   (program (hash-union (program-vars var-prog) vars
-                                        #:combine/key combine-var-keys)
+                   (program (hash-combine (program-vars var-prog) vars)
                             (append (program-stmts var-prog) stmts)))))
        (define subexpr-prog (flatten-code subexpr next-vartab))
-       (program (hash-union (program-vars var-prog)
-                            (program-vars subexpr-prog)
-                            #:combine/key combine-var-keys)
+       (program (hash-combine (program-vars var-prog)
+                            (program-vars subexpr-prog))
                 (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
       ; if expression
       [`(if ,cond ,then ,else)
@@ -96,9 +99,8 @@
          (flatten-code else vartab))
        (define dest-name (next-tmp-name))
        (program
-        (hash-union (make-immutable-hash (list (cons dest-name T)))
-                    ce1-vars ce2-vars then-vars else-vars
-                    #:combine/key combine-var-keys)
+        (hash-combine (make-immutable-hash (list (cons dest-name T)))
+                    ce1-vars ce2-vars then-vars else-vars)
         (append ce1-stmts
                 ce2-stmts
                 (list (if-stmt
@@ -111,7 +113,7 @@
        (match-define (program vars (list stmts ... (return-stmt ans)))
          (flatten-code subexpr vartab))
        (define dest-name (next-tmp-name))
-       (program (hash-union vars (make-immutable-hash (list (cons dest-name T))))
+       (program (hash-combine vars (make-immutable-hash (list (cons dest-name T))))
                 (append stmts (list (assign-stmt `(,op ,ans) dest-name)
                                     (return-stmt dest-name))))]
       ; binary arithmetic / boolean operators
@@ -122,14 +124,13 @@
          (flatten-code R vartab))
        (define dest-name (next-tmp-name))
        (program
-        (hash-union L-vars R-vars
+        (hash-combine L-vars R-vars
                     (make-immutable-hash
                      (filter
                       (λ (p) (symbol? (car p)))
                       (list (cons L-ans (ht-T L))
                             (cons R-ans (ht-T R))
-                            (cons dest-name T))))
-                    #:combine/key combine-var-keys)
+                            (cons dest-name T)))))
         (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
                                       (return-stmt dest-name))))]
       ; vector-ref
@@ -138,8 +139,7 @@
          (flatten-code vec vartab))
        (define dest-name (next-tmp-name))
        (program
-        (hash-union vars (make-immutable-hash (list (cons dest-name T)))
-                    #:combine/key combine-var-keys)
+        (hash-combine vars (make-immutable-hash (list (cons dest-name T))))
         (append stmts (list (assign-stmt `(vector-ref ,ans ,i) dest-name)
                             (return-stmt dest-name))))]
       ; vector-set!
@@ -150,9 +150,8 @@
          (flatten-code arg vartab))
        (define void-return-name (next-tmp-name))
        (program
-        (hash-union vec-vars arg-vars
-                    (make-immutable-hash (list (cons void-return-name 'Void)))
-                    #:combine/key combine-var-keys)
+        (hash-combine vec-vars arg-vars
+                    (make-immutable-hash (list (cons void-return-name 'Void))))
         (append vec-stmts arg-stmts
                 (list (assign-stmt `(vector-set! ,vec-ans ,i ,arg-ans) void-return-name)
                             (return-stmt void-return-name))))]
