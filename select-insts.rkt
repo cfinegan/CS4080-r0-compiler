@@ -13,6 +13,7 @@
 (define (types->tag tys)
   (unless (not (empty? tys))
     (error "Empty type list is not valid for a vector"))
+  (displayln tys)
   (define tag-bits
     (for/fold ([tag 0])
               ([ty (reverse tys)])
@@ -70,7 +71,7 @@
         (list (binary-inst 'mov (arg->val vec) (reg 'rax))
               (binary-inst 'mov (arg->val arg) (deref 'rax (* ptr-size (add1 i))))
               (binary-inst 'mov (int 1) (var dest)))]
-       [`(allocate ,tys ...)
+       [`(allocate ,tys)
         (list (binary-inst 'mov (global "free_ptr") (arg->val dest))
               (binary-inst 'add (* ptr-size (add1 (length tys))) (global "free_ptr"))
               (binary-inst 'mov (arg->val dest) (reg 'rax))

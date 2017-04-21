@@ -39,7 +39,7 @@
        (define ty-arg (recur arg))
        (unless (eq? (ht-T ty-arg) 'Integer)
          (error (fmt-type-error arg 'Integer expr)))
-       (ht `(collect ,ty-arg) 'Void)]
+       (ht `(collect ,arg) 'Void)]
       ; allocate (internal to compiler only)
       [`(allocate ,tys)
        (ht expr (cons 'Vector tys))]

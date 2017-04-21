@@ -45,6 +45,8 @@
        (define (render-var var)
          `(,(render-name (first var) next-symtab) ,(uniquify (second var) symtab)))
        `(let ,(map render-var vars) ,(uniquify subexpr next-symtab))]
+;      [`(if (let (,(? let-var? vars) ...) ,subexpr) ,then ,else)
+;       `(let 
       [`(if ,cond ,then ,otherwise)
        `(if ,(uniquify cond symtab) ,(uniquify then symtab) ,(uniquify otherwise symtab))]
       [(? list?)

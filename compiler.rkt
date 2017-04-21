@@ -56,7 +56,7 @@
          ;; if collecting garbage, vectors interfere with callee-saves
          (unless (not (equal? label "gc_collect"))
            (for ([var l-after])
-             (unless (not (vector-ty? (hash-ref (var-name var) vars)))
+             (unless (not (vector-ty? (hash-ref vars (var-name var))))
                (for ([reg callee-saved])
                  (add-edge! graph reg var)))))]
         ;; if statement
@@ -98,8 +98,6 @@
   
   (define-values (num-colors colorings)
     (coloring/greedy interference))
-
-  (displayln colorings)
 
   (define spill-count (max 0 (- num-colors num-valid-registers)))
   (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
@@ -562,10 +560,13 @@
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 
-;(define u-expr (uniquify (replace-syntax test-expr)))
-;(define typed-expr (expose-alloc (typeof u-expr)))
-;(define return-type (ht-T typed-expr))
-;(uncover-live (select-insts (flatten-code typed-expr)))
+#;
+(define test-expr '(vector 42 43))
+
+(define u-expr (uniquify (replace-syntax test-expr)))
+(define typed-expr (expose-alloc (typeof u-expr)))
+(define return-type (ht-T typed-expr))
+(assign-homes (uncover-live (select-insts (flatten-code typed-expr))))
 
 #;
 (compile/run test-expr #:in "10 10")
