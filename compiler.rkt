@@ -90,7 +90,7 @@
   (match-define (xprogram vars insts l-afters) xprog)
   (define interference (build-interference xprog))
   (define num-valid-registers (current-register-max))
-  
+
   (define (color->home color)
     (if (< color num-valid-registers)
         (reg (vector-ref alloc-registers color))
@@ -99,13 +99,19 @@
   (define-values (num-colors colorings)
     (coloring/greedy interference))
 
-  (define spill-count (max 0 (- num-colors num-valid-registers)))
-  (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
+  ;; if num-colors is zero, there may still be one v
+  (define spill-count
+    (if (and (zero? num-colors) (zero? num-valid-registers))
+        1
+        (max 0 (- num-colors num-valid-registers))))
+
   
+  (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
+
   (unless (not (verbose-output?))
-    (display "num colors: ") (display num-colors) (newline)
-    (display "spill count: ") (display spill-count) (newline)
-    (display "stack size: ") (display stack-size) (newline))
+    (displayln (format "num colors: ~a" num-colors))
+    (displayln (format "spill count: ~a" spill-count))
+    (displayln (format "stack size: ~a" stack-size)))
   
   (define (get-var-home tok)
     (if (var? tok)
@@ -124,13 +130,14 @@
            (match inst
              [(unary-inst 'call func)
               (define lives (set-intersect (map get-var-home l-after) caller-saved))
-              (append (map (λ (var) (unary-inst 'push var)) lives)
-                      (if (odd? (length lives))
-                          (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
-                                inst
-                                (binary-inst 'add (int ptr-size) (reg 'rsp)))
-                          (list inst))
-                      (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
+              (append
+               (map (λ (var) (unary-inst 'push var)) lives)
+               (if (odd? (length lives))
+                   (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
+                         inst
+                         (binary-inst 'add (int ptr-size) (reg 'rsp)))
+                   (list inst))
+               (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
              [(unary-inst op arg)
               (unary-inst op (get-var-home arg))]
              [(binary-inst op src dest)
@@ -185,15 +192,15 @@
   
   (define (patch inst)
     (match inst
+      ;; memory cannot be deref'd twice in the same instruction
+      [(binary-inst op (? deref? src) (? deref? dest))
+       (list (binary-inst 'mov src (reg 'rax))
+             (binary-inst op (reg 'rax) dest))]
       ;; remove trivial moves
       [(binary-inst 'mov src dest)
        (if (equal? src dest)
            empty
            inst)]
-      ;; memory cannot be deref'd twice in the same instruction
-      [(binary-inst op (? deref? src) (? deref? dest))
-       (list (binary-inst 'mov src (reg 'rax))
-             (binary-inst op (reg 'rax) dest))]
       ;; cmp instruction can't have literals as second arg
       [(binary-inst 'cmp arg1 (? int? arg2))
        (list (binary-inst 'mov arg2 (reg 'rax))
@@ -201,7 +208,10 @@
       ;; set instruction can only reference 8-bit registers
       [(unary-inst `(set ,op) dest)
        (list (unary-inst `(set ,op) (reg 'al))
-             (binary-inst 'movzb (reg 'al) dest))]
+             (if (deref? dest)
+                 (list (binary-inst 'movzb (reg 'al) (reg 'rax))
+                       (binary-inst 'mov (reg 'rax) dest))
+                 (binary-inst 'movzb (reg 'al) dest)))]
       [_ inst]))
   
   (xxprogram stack-size (flatten (map patch insts))))
@@ -476,97 +486,20 @@
 
 
 (run-all-tests)
-
 #;
-(define test-expr
-  '(let ([v 1] [w 46])
-     (let ([x (+ v 7)])
-       (let ([y (+ 4 x)] [z (+ x w)])
-         (+ z (- y))))))
+(parameterize ([current-register-max 0])
+  (run-all-tests))
 
-#;
-(define test-expr
-  '(let ([x 1] [y 2])
-     (+ x y)))
 
-#;
-(define test-expr
-  '(let ([x (+ 2 3)] [y (- 5)] [a 55])
-     (let ([x (- x y)] [z (+ x y)])
-       (let ([w (+ z x)])
-         (+ w (- x (+ a 2)))))))
-
-#;
-(define test-expr
-  '(let ([a (read)] [b (read)] [c (read)] [d (read)])
-     (+ a (+ b (+ c d)))))
-
-#;
-(define test-expr
-  '(let ([a (read)] [b (read)])
-     (+ a b)))
-
-#;
-(define test-expr
-  '(if (let ([x 5] [y 4]) (> x y)) 42 90))
-
-#;
-(define test-expr
-  '(= 3 (- 4 1)))
-
-#;
-(define test-expr
-  '(let ([x (+ 2 3)] [y (- 5)] [a 55])
-     (let ([x (- x y)] [z (+ x y)])
-       (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
-         (+ w (- x (+ a 2)))))))
-
-#;
-(define test-expr
-  '(if (<= 1 2) (+ 1 2) (- 3 2)))
-
-#;
-(define test-expr
-  '(let ([a (read)] [b (read)])
-     (if (= a b)
-         123456
-         (if (< a b)
-             (- b a)
-             (- a b)))))
-
-#;
-(define test-expr
-  '(let ([a (read)] [b (read)])
-     (= a b)))
-
-#;
-(define test-expr
-  '(let ([a 5] [b (= 3 3)])
-     (if b a 3)))
-
-#;
-(define test-expr
-  '(if (= (read) (read))
-       123456
-       (+ 2 3)))
-
-#;
-(define test-expr
-  '(let ([a 5] [b 10])
-     (if (> a b)
-         a
-         b)))
 
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
-
 #;
 (define test-expr '(vector 42 43))
+
+
 
 (define u-expr (uniquify (replace-syntax test-expr)))
 (define typed-expr (expose-alloc (typeof u-expr)))
 (define return-type (ht-T typed-expr))
 (assign-homes (uncover-live (select-insts (flatten-code typed-expr))))
-
-#;
-(compile/run test-expr #:in "10 10")
