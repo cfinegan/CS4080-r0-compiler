@@ -16,7 +16,7 @@
 ;;;
 ;; Note: %rax omitted because it's used by compiler as scratch.
 (define caller-saved (map reg '(rcx rdx rdi rsi r8 r9 r10 r11)))
-(define callee-saved (map reg '(rbx rbp rsp r12 r13 r14 r15)))
+(define callee-saved (map reg '(rbx r12 r13 r14 r15)))
 
 (define (build-interference xprog)
   
@@ -73,8 +73,8 @@
 
 ;; note: r15 is used for root stack, not for allocation
 (define alloc-registers
-  #(rbx rdi rsi r12 r13 r14 ;; callee-saved
-        rcx rdx r8 r9 r10 r11 ;; caller-saved
+  #(rbx r12 r13 r14 ;; callee-saved
+        rcx rdx rdi rsi r8 r9 r10 r11 ;; caller-saved
         ))
 
 (define current-register-max
@@ -153,8 +153,8 @@
               ; live values of non-vector type
               (define lives
                 (set-subtract
-                 live-vecs
-                 (set-intersect (map get-var-home l-after) caller-saved)))
+                 (set-intersect (map get-var-home l-after) caller-saved)
+                 live-vecs))
               ; add push/pops for live registers to call inst.
               (list
                (if (empty? live-vecs) empty
@@ -357,11 +357,25 @@
      (fmt-asm "movq" "%rsp" "%rbp")
      (if (zero? stack-size) "" (fmt-asm "subq" (int->asm stack-size) "%rsp"))))
 
+  (define callee-prefix
+    (apply
+     string-append
+     (map
+      (λ (reg) (fmt-asm "pushq" (arg->asm reg)))
+      callee-saved)))
+          
   (define print-call
     (string-append
      (fmt-asm "movq" "%rax" "%rdi")
      (fmt-asm "movq" (int->asm (type->int ty)) "%rsi")
      (fmt-asm "callq" (fmt-label "write_any"))))
+
+  (define callee-suffix
+    (apply
+     string-append
+     (map
+      (λ (reg) (fmt-asm "popq" (arg->asm reg)))
+      (reverse callee-saved))))
   
   (define stack-suffix
     (string-append
@@ -383,8 +397,10 @@
     (string-append
      asm-prefix
      stack-prefix
+     callee-prefix
      (apply string-append (map inst->asm insts))
      print-call
+     callee-suffix
      stack-suffix
      main-return
      type-table))
@@ -531,7 +547,8 @@
 (parameterize ([current-register-max 0])
   (run-all-tests))
 
-
+(compile/run '(let ((x (read)) (y (read))) (+ x y)) #:in "5 6")
+(display (expr->asm '(let ((x (read)) (y (read))) (+ x y))))
 
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
@@ -540,7 +557,7 @@
 
 
 
-(define u-expr (uniquify (replace-syntax test-expr)))
-(define typed-expr (expose-alloc (typeof u-expr)))
-(define return-type (ht-T typed-expr))
-(assign-homes (uncover-live (select-insts (flatten-code typed-expr))))
+;(define u-expr (uniquify (replace-syntax test-expr)))
+;(define typed-expr (expose-alloc (typeof u-expr)))
+;(define return-type (ht-T typed-expr))
+;(assign-homes (uncover-live (select-insts (flatten-code typed-expr))))
