@@ -14,7 +14,7 @@
   (let expose ([expr expr])
     (match expr
       [(ht `(vector ,args ...) `(Vector ,tys ...))
-       (define bytes (* (length tys) ptr-size))
+       (define bytes (* (add1 (length tys)) ptr-size))
        (define arg-names (map (λ (_) (next-arg-name)) args))
        (typeof
         (for/fold

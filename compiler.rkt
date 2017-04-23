@@ -48,7 +48,7 @@
            (unless (equal? var dest)
              (add-edge! graph var dest)))]
         ;; function call
-        [(unary-inst 'call (? string? label))
+        #;[(unary-inst 'call (? string? label))
          ;; always interfere with caller-saves
          (for ([var l-after])
            (for ([reg caller-saved])
@@ -89,7 +89,8 @@
 (define (assign-homes xprog)  
   (match-define (xprogram vars insts l-afters) xprog)
   (define interference (build-interference xprog))
-  (define num-valid-registers (current-register-max))
+  (define num-valid-registers
+    (min (current-register-max) (vector-length alloc-registers)))
 
   (define (color->home color)
     (if (< color num-valid-registers)
@@ -99,14 +100,25 @@
   (define-values (num-colors colorings)
     (coloring/greedy interference))
 
-  ;; if num-colors is zero, there may still be one v
+  ;; if num-colors is zero (no interference) and num-valid-registers is
+  ;; zero, then assume 1 spill because the graph library can't tell the
+  ;; difference between zero variables and 1 variable.
   (define spill-count
     (if (and (zero? num-colors) (zero? num-valid-registers))
         1
         (max 0 (- num-colors num-valid-registers))))
 
-  
-  (define stack-size (* ptr-size (if (even? spill-count) spill-count (add1 spill-count))))
+  (define stack-size
+    (* ptr-size (if (even? spill-count)
+                    spill-count
+                    (add1 spill-count))))
+
+;  (displayln colorings)
+;  (newline)
+;  (displayln
+;   (filter
+;    (λ (p) (var? (car p)))
+;    (hash->list colorings)))
 
   (unless (not (verbose-output?))
     (displayln (format "num colors: ~a" num-colors))
@@ -128,16 +140,45 @@
                   ([inst insts] [l-after l-afters])
           (cons
            (match inst
-             [(unary-inst 'call func)
-              (define lives (set-intersect (map get-var-home l-after) caller-saved))
-              (append
+             [(unary-inst 'call name)
+              ; live values which are of type vector
+              (define live-vecs
+                (if (equal? name "gc_collect")
+                    (set-intersect
+                     (set-union caller-saved callee-saved)
+                     (map get-var-home
+                          (filter (λ (v) (vector-ty? (hash-ref vars (var-name v))))
+                                  l-after)))
+                    empty))
+              ; live values of non-vector type
+              (define lives
+                (set-subtract
+                 live-vecs
+                 (set-intersect (map get-var-home l-after) caller-saved)))
+              ; add push/pops for live registers to call inst.
+              (list
+               (if (empty? live-vecs) empty
+                   (list
+                    (binary-inst 'add (int (* ptr-size (length live-vecs))) (reg 'r15))
+                    (map (λ (idx) (binary-inst 'mov
+                                               (list-ref live-vecs idx)
+                                               (deref 'r15 (- (* ptr-size (add1 idx))))))
+                         (range (length live-vecs)))))
                (map (λ (var) (unary-inst 'push var)) lives)
                (if (odd? (length lives))
-                   (list (binary-inst 'sub (int ptr-size) (reg 'rsp))
-                         inst
-                         (binary-inst 'add (int ptr-size) (reg 'rsp)))
-                   (list inst))
-               (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives))]
+                   (list
+                    (binary-inst 'sub (int ptr-size) (reg 'rsp))
+                    inst
+                    (binary-inst 'add (int ptr-size) (reg 'rsp)))
+                   inst)
+               (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives)
+               (if (empty? live-vecs) empty
+                   (list
+                    (map (λ (idx) (binary-inst 'mov
+                                               (deref 'r15 (- (* ptr-size (add1 idx))))
+                                               (list-ref live-vecs idx)))
+                         (reverse (range (length live-vecs))))
+                    (binary-inst 'sub (int (* ptr-size (length live-vecs))) (reg 'r15)))))]
              [(unary-inst op arg)
               (unary-inst op (get-var-home arg))]
              [(binary-inst op src dest)

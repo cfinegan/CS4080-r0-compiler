@@ -13,7 +13,6 @@
 (define (types->tag tys)
   (unless (not (empty? tys))
     (error "Empty type list is not valid for a vector"))
-  (displayln tys)
   (define tag-bits
     (for/fold ([tag 0])
               ([ty (reverse tys)])
