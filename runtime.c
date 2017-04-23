@@ -5,27 +5,25 @@
 #define STR_TRUE "#t"
 #define STR_FALSE "#f"
 
-typedef int64_t int64;
-
-int64 read_int();
+int64_t read_int();
 void write_void();
-void write_int(int64 n);
-void write_bool(int64 n);
-void write_any(int64 n, int64 ty);
+void write_int(int64_t n);
+void write_bool(int64_t n);
+void write_any(int64_t n, int64_t ty);
 
 extern int r0func();
 
-extern int64 ty_void;
-extern int64 ty_integer;
-extern int64 ty_boolean;
+extern int64_t ty_void;
+extern int64_t ty_integer;
+extern int64_t ty_boolean;
 
 int main(int argc, char* argv[]) {
     r0func();
     return EXIT_SUCCESS;
 }
 
-int64 read_int() {
-    int64 n;
+int64_t read_int() {
+    int64_t n;
     int result;
     result = scanf("%ld", &n);
     if (result == -1) {
@@ -46,21 +44,21 @@ void write_void() {
     }
 }
 
-void write_int(int64 n) {
+void write_int(int64_t n) {
     if (printf("%ld\n", n) == -1) {
         perror("write_int failed");
         exit(EXIT_FAILURE);
     }
 }
 
-void write_bool(int64 n) {
+void write_bool(int64_t n) {
     if (printf("%s\n", (n ? STR_TRUE : STR_FALSE)) == -1) {
         perror("write_bool failed");
         exit(EXIT_FAILURE);
     }
 }
 
-void write_any(int64 n, int64 ty) {
+void write_any(int64_t n, int64_t ty) {
     if (ty == ty_void) {
         write_void();
     }
