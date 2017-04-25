@@ -471,6 +471,9 @@
 (define (expected? expr #:in [in-str ""])
   (define eval-res (r0-eval expr #:in in-str))
   (define asm-res (compile/run expr #:in in-str))
+  (unless (equal? eval-res asm-res)
+    (displayln (format "eval res: ~a" eval-res))
+    (displayln (format "asm  res: ~a" asm-res)))
   (equal? eval-res asm-res))
 
 (struct tc (expr in-str) #:transparent)
@@ -547,9 +550,6 @@
 (parameterize ([current-register-max 0])
   (run-all-tests))
 
-(compile/run '(let ((x (read)) (y (read))) (+ x y)) #:in "5 6")
-(display (expr->asm '(let ((x (read)) (y (read))) (+ x y))))
-
 (define test-expr
   '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
 #;
@@ -557,7 +557,9 @@
 
 
 
-;(define u-expr (uniquify (replace-syntax test-expr)))
-;(define typed-expr (expose-alloc (typeof u-expr)))
-;(define return-type (ht-T typed-expr))
-;(assign-homes (uncover-live (select-insts (flatten-code typed-expr))))
+(define u-expr (uniquify (replace-syntax test-expr)))
+(define typed-expr (expose-alloc (typeof u-expr)))
+(define return-type (ht-T typed-expr))
+(define si-e (select-insts (flatten-code typed-expr)))
+si-e
+(assign-homes (uncover-live si-e))
