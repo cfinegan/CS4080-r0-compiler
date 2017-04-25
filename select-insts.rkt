@@ -78,7 +78,8 @@
        [`(collect ,bytes)
         (list (binary-inst 'mov root-stack (vector-ref arg-registers 0))
               (binary-inst 'mov (int bytes) (vector-ref arg-registers 1))
-              (unary-inst 'call "gc_collect"))]
+              (unary-inst 'call "gc_collect")
+              (binary-inst 'mov (int 1) (var dest)))]
        [`(global ,name)
         (binary-inst 'mov (global name) (arg->val dest))]
        )]
