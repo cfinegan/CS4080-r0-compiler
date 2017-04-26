@@ -47,18 +47,6 @@
          (for ([var l-after])
            (unless (equal? var dest)
              (add-edge! graph var dest)))]
-        ;; function call
-        #;[(unary-inst 'call (? string? label))
-         ;; always interfere with caller-saves
-         (for ([var l-after])
-           (for ([reg caller-saved])
-             (add-edge! graph reg var)))
-         ;; if collecting garbage, vectors interfere with callee-saves
-         (unless (not (equal? label "gc_collect"))
-           (for ([var l-after])
-             (unless (not (vector-ty? (hash-ref vars (var-name var))))
-               (for ([reg callee-saved])
-                 (add-edge! graph reg var)))))]
         ;; if statement
         [(if-stmt/lives cond then then-lives ow ow-lives)
          (begin
@@ -113,13 +101,6 @@
                     spill-count
                     (add1 spill-count))))
 
-;  (displayln colorings)
-;  (newline)
-;  (displayln
-;   (filter
-;    (λ (p) (var? (car p)))
-;    (hash->list colorings)))
-
   (unless (not (verbose-output?))
     (displayln (format "num colors: ~a" num-colors))
     (displayln (format "spill count: ~a" spill-count))
@@ -140,6 +121,7 @@
                   ([inst insts] [l-after l-afters])
           (cons
            (match inst
+             ;; call inst
              [(unary-inst 'call name)
               ; live values which are of type vector
               (define live-vecs
@@ -179,10 +161,13 @@
                                                (list-ref live-vecs idx)))
                          (reverse (range (length live-vecs))))
                     (binary-inst 'sub (int (* ptr-size (length live-vecs))) (reg 'r15)))))]
+             ;; other unary insts
              [(unary-inst op arg)
               (unary-inst op (get-var-home arg))]
+             ;; binary inst
              [(binary-inst op src dest)
               (binary-inst op (get-var-home src) (get-var-home dest))]
+             ;; if statement
              [(if-stmt/lives `(,cond-op ,L ,R) then then-afters ow ow-afters)
               (if-stmt `(,cond-op ,(get-var-home L) ,(get-var-home R))
                        (assign-homes then then-afters)
@@ -234,7 +219,7 @@
   (define (patch inst)
     (match inst
       ;; memory cannot be deref'd twice in the same instruction
-      [(binary-inst op (? deref? src) (? deref? dest))
+      [(binary-inst op (? (or/c deref? global?) src) (? (or/c deref? global?) dest))
        (list (binary-inst 'mov src (reg 'rax))
              (binary-inst op (reg 'rax) dest))]
       ;; remove trivial moves
@@ -311,7 +296,9 @@
     [(deref r offset)
      (string-append (if (zero? offset) "" (number->string offset)) "(%" (symbol->string r) ")")]
     [(? string? str)
-     (fmt-label str)]))
+     (fmt-label str)]
+    [(global name)
+     (format "~a(%rip)" (fmt-label name))]))
 
 (define (inst->asm inst)
   (match inst
@@ -326,7 +313,9 @@
   (match ty
     ['Void 0]
     ['Integer 1]
-    ['Boolean 2]))
+    ['Boolean 2]
+    ;; TODO: proper vector printing
+    [(? vector-ty?) 1]))
 
 (define (print-asm xxprog ty)
   (define stack-size (xxprogram-stack-size xxprog))
@@ -363,6 +352,9 @@
      (map
       (λ (reg) (fmt-asm "pushq" (arg->asm reg)))
       callee-saved)))
+
+  (define rootstack-prefix
+    (inst->asm (binary-inst 'mov (global "rootstack_begin") (reg 'r15))))
           
   (define print-call
     (string-append
@@ -398,6 +390,7 @@
      asm-prefix
      stack-prefix
      callee-prefix
+     rootstack-prefix
      (apply string-append (map inst->asm insts))
      print-call
      callee-suffix
@@ -555,11 +548,19 @@
 #;
 (define test-expr '(vector 42 43))
 
+(compile/run test-expr)
+
+(parameterize ([current-register-max 0])
+  (compile/run '(vector-ref (vector 42) 0)))
+(parameterize ([current-register-max 0])
+  (compile/run '(vector-ref (vector-ref (vector (vector 42)) 0) 0)))
 
 
-(define u-expr (uniquify (replace-syntax test-expr)))
-(define typed-expr (expose-alloc (typeof u-expr)))
-(define return-type (ht-T typed-expr))
-(define si-e (select-insts (flatten-code typed-expr)))
-si-e
-(assign-homes (uncover-live si-e))
+;(define u-expr (uniquify (replace-syntax test-expr)))
+;(define typed-expr (expose-alloc (typeof u-expr)))
+;(define return-type (ht-T typed-expr))
+;(define si-e (select-insts (flatten-code typed-expr)))
+;si-e
+;(define ah-e (assign-homes (uncover-live si-e)))
+;ah-e
+;(display (print-asm (patch-insts (lower-conds ah-e)) return-type))

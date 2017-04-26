@@ -72,11 +72,11 @@
               (binary-inst 'mov (int 1) (var dest)))]
        [`(allocate ,tys)
         (list (binary-inst 'mov (global "free_ptr") (arg->val dest))
-              (binary-inst 'add (* ptr-size (add1 (length tys))) (global "free_ptr"))
+              (binary-inst 'add (int (* ptr-size (add1 (length tys)))) (global "free_ptr"))
               (binary-inst 'mov (arg->val dest) (reg 'rax))
               (binary-inst 'mov (int (types->tag tys)) (deref 'rax 0)))]
        [`(collect ,bytes)
-        (list (binary-inst 'mov root-stack (vector-ref arg-registers 0))
+        (list (binary-inst 'mov (reg 'r15) (vector-ref arg-registers 0))
               (binary-inst 'mov (int bytes) (vector-ref arg-registers 1))
               (unary-inst 'call "gc_collect")
               (binary-inst 'mov (int 1) (var dest)))]

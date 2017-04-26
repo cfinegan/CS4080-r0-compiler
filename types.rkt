@@ -50,5 +50,4 @@
 
 ;; global constants
 (define ptr-size 8)
-(define root-stack 'r15)
 (define arg-registers (vector-map reg #(rdi rsi rdx rcx r8 r9)))

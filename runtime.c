@@ -45,14 +45,16 @@ int main(int argc, char* argv[]) {
     if (argc > 1 && sscanf(argv[1], "%lu", &arg_heap_size) == 1) {
         uint64_t heap_misalign = arg_heap_size % PG_SIZE;
         if (heap_misalign != 0 || arg_heap_size == 0) {
-            arg_heap_size = (arg_heap_size / PG_SIZE) + 1;
+            uint64_t heap_pages = (arg_heap_size / PG_SIZE) + 1;
+            arg_heap_size = heap_pages * PG_SIZE;
         }
     }
     
     if (argc > 2 && sscanf(argv[2], "%lu", &arg_rootstack_size) == 1) {
         uint64_t stack_misalign = arg_rootstack_size % PG_SIZE;
         if (stack_misalign != 0 || arg_heap_size == 0) {
-            arg_rootstack_size = (arg_rootstack_size / PG_SIZE) + 1;
+            uint64_t stack_pages = (arg_rootstack_size / PG_SIZE) + 1;
+            arg_rootstack_size = stack_pages * PG_SIZE;
         }
     }
     
@@ -98,6 +100,24 @@ void gc_init(uint64_t rootstack_size, uint64_t heap_size) {
     tospace_begin = fromspace_end + PG_SIZE;
     tospace_end = tospace_begin + heap_size;
     memset(fromspace_begin, 0, heap_size);
+    
+    /*rootstack_begin = malloc(rootstack_size);
+    if (rootstack_begin == NULL) {
+        perror("failed to allocate rootstack");
+        exit(EXIT_FAILURE);
+    }
+    memset(rootstack_begin, 0, rootstack_size);
+    
+    fromspace_begin = malloc(heap_size * 2);
+    if (fromspace_begin == NULL) {
+        perror("failed to allocate r0 heap");
+        exit(EXIT_FAILURE);
+    }
+    free_ptr = fromspace_begin;
+    fromspace_end = fromspace_begin + heap_size;
+    tospace_begin = fromspace_end;
+    tospace_end = tospace_begin + heap_size;
+    memset(fromspace_begin, 0, heap_size * 2);*/
 }
 
 void gc_collect(int64_t** rootstack_ptr, uint64_t bytes_requested) {
