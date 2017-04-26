@@ -439,7 +439,7 @@
     [(= 1 st)
      (error (read-line stdout))]
     [(not (zero? st))
-     (error "r0 program failed with exit status:" st)]
+     (displayln (format "r0 program failed with exit status: ~a" st) (current-error-port))]
     [else
      (define a (read stdout))
      (close-input-port stdout)
@@ -542,16 +542,13 @@
 
 (run-all-tests)
 
+;; last test of this fails
 (parameterize ([current-register-max 0])
   (run-all-tests))
 
 ;; failing tests
-#;
-(parameterize ([current-register-max 0])
-  (compile/run '(vector-ref (vector-ref (vector (vector 42)) 0) 0)))
-#;
 (compile/run '(vector-ref (vector 42 43) 1))
-#;
+
 (compile/run '(let ([v (vector 42)])
                 (begin (vector-set! v 0 52)
                        (vector-ref v 0))))
