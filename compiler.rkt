@@ -324,6 +324,7 @@
   (define ty_void (fmt-label "ty_void"))
   (define ty_integer (fmt-label "ty_integer"))
   (define ty_boolean (fmt-label "ty_boolean"))
+  (define ty_vector (fmt-label "ty_vector"))
 
   (define (globl-names)
     (define (fmt-globl label)
@@ -521,6 +522,7 @@
           (+ z (- y)))))
     (let ([a 5] [b (= 3 3)])
       (if b a 3))
+    (vector-ref (vector-ref (vector (vector 42)) 0) 0)
     ))
 
 (define (run-all-tests)
@@ -539,28 +541,17 @@
 
 
 (run-all-tests)
-#;
+
 (parameterize ([current-register-max 0])
   (run-all-tests))
 
-(define test-expr
-  '(vector-ref (vector-ref (vector (vector 42)) 0) 0))
+;; failing tests
 #;
-(define test-expr '(vector 42 43))
-
-(compile/run test-expr)
-
-(parameterize ([current-register-max 0])
-  (compile/run '(vector-ref (vector 42) 0)))
 (parameterize ([current-register-max 0])
   (compile/run '(vector-ref (vector-ref (vector (vector 42)) 0) 0)))
-
-
-;(define u-expr (uniquify (replace-syntax test-expr)))
-;(define typed-expr (expose-alloc (typeof u-expr)))
-;(define return-type (ht-T typed-expr))
-;(define si-e (select-insts (flatten-code typed-expr)))
-;si-e
-;(define ah-e (assign-homes (uncover-live si-e)))
-;ah-e
-;(display (print-asm (patch-insts (lower-conds ah-e)) return-type))
+#;
+(compile/run '(vector-ref (vector 42 43) 1))
+#;
+(compile/run '(let ([v (vector 42)])
+                (begin (vector-set! v 0 52)
+                       (vector-ref v 0))))

@@ -18,6 +18,7 @@ int64_t read_int();
 void write_void();
 void write_int(int64_t n);
 void write_bool(int64_t n);
+void write_vector(int64_t* vec);
 void write_any(int64_t n, int64_t ty);
 
 extern int r0func();
@@ -25,6 +26,7 @@ extern int r0func();
 extern int64_t ty_void;
 extern int64_t ty_integer;
 extern int64_t ty_boolean;
+extern int64_t ty_vector;
 
 int64_t* free_ptr = NULL;
 int64_t* fromspace_begin = NULL;
@@ -129,7 +131,12 @@ int64_t read_int() {
     int result;
     result = scanf("%ld", &n);
     if (result == -1) {
-        perror("scanf failed");
+        if (feof(stdin)) {
+            fprintf(stderr, "error: expected integer, got EOF\n");
+        }
+        else {
+            perror("scanf failed");
+        }
         exit(EXIT_FAILURE);
     }
     else if (result == 0) {
@@ -158,6 +165,10 @@ void write_bool(int64_t n) {
         perror("write_bool failed");
         exit(EXIT_FAILURE);
     }
+}
+
+void write_vector(int64_t* vec) {
+    
 }
 
 void write_any(int64_t n, int64_t ty) {
