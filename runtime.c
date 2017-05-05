@@ -7,11 +7,6 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
-#define STR_TRUE "#t"
-#define STR_FALSE "#f"
-
-#define PTR_SIZE sizeof(uint64_t)
-
 void gc_init(uint64_t rootstack_size, uint64_t heap_size);
 void gc_collect(int64_t** roostack_ptr, uint64_t bytes_requested);
 int64_t read_int();
@@ -44,20 +39,12 @@ int main(int argc, char* argv[]) {
     uint64_t arg_heap_size = (uint64_t)PG_SIZE;
     uint64_t arg_rootstack_size = (uint64_t)PG_SIZE;
     
-    if (argc > 1 && sscanf(argv[1], "%lu", &arg_heap_size) == 1) {
-        uint64_t heap_misalign = arg_heap_size % PG_SIZE;
-        if (heap_misalign != 0 || arg_heap_size == 0) {
-            uint64_t heap_pages = (arg_heap_size / PG_SIZE) + 1;
-            arg_heap_size = heap_pages * PG_SIZE;
-        }
+    if (argc > 1 && sscanf(argv[1], "%lu", &arg_rootstack_size) < 1) {
+        fprintf(stderr, "couldn't read rootstack size: %s\n", argv[1]);
     }
     
-    if (argc > 2 && sscanf(argv[2], "%lu", &arg_rootstack_size) == 1) {
-        uint64_t stack_misalign = arg_rootstack_size % PG_SIZE;
-        if (stack_misalign != 0 || arg_heap_size == 0) {
-            uint64_t stack_pages = (arg_rootstack_size / PG_SIZE) + 1;
-            arg_rootstack_size = stack_pages * PG_SIZE;
-        }
+    if (argc > 2 && sscanf(argv[2], "%lu", &arg_heap_size) < 1) {
+        fprintf(stderr, "couldn't read heap size: %s\n", argv[2]);
     }
     
     gc_init(arg_rootstack_size, arg_heap_size);
@@ -67,6 +54,13 @@ int main(int argc, char* argv[]) {
 }
 
 void gc_init(uint64_t rootstack_size, uint64_t heap_size) {
+
+    // adjust rootstack size to multiple of page size
+    uint64_t stack_misalign = rootstack_size % PG_SIZE;
+    if (stack_misalign != 0 || rootstack_size == 0) {
+        uint64_t stack_pages = (rootstack_size / PG_SIZE) + 1;
+        rootstack_size = stack_pages * PG_SIZE;
+    }
     
     // allocate rootstack
     void* tmp_rootstack = mmap(NULL, rootstack_size + (PG_SIZE * 2), 
@@ -82,6 +76,13 @@ void gc_init(uint64_t rootstack_size, uint64_t heap_size) {
     }
     rootstack_begin = tmp_rootstack + PG_SIZE;
     memset(rootstack_begin, 0, rootstack_size);
+    
+    // adjust heap size to multiple of page size
+    uint64_t heap_misalign = heap_size % PG_SIZE;
+    if (heap_misalign != 0 || heap_size == 0) {
+        uint64_t heap_pages = (heap_size / PG_SIZE) + 1;
+        heap_size = heap_pages * PG_SIZE;
+    }
 
     // allocate heap
     void* heap_begin = mmap(NULL, (heap_size * 2) + (PG_SIZE * 3),
@@ -128,22 +129,20 @@ void gc_collect(int64_t** rootstack_ptr, uint64_t bytes_requested) {
 
 int64_t read_int() {
     int64_t n;
-    int result;
-    result = scanf("%ld", &n);
-    if (result == -1) {
-        if (feof(stdin)) {
-            fprintf(stderr, "error: expected integer, got EOF\n");
-        }
-        else {
-            perror("scanf failed");
-        }
-        exit(EXIT_FAILURE);
+    int result = scanf("%ld", &n);
+    if (result == 0) {
+        fprintf(stderr, "error: scanf expected integer\n");
     }
-    else if (result == 0) {
-        fprintf(stderr, "error: expected integer\n");
-        exit(EXIT_FAILURE);
+    else if (result == EOF && ferror(stdin)) {
+        perror("scanf failed");
     }
-    return n;
+    else if (result == EOF) {
+        fprintf(stderr, "error: scanf expected integer, got EOF\n");
+    }
+    else {
+        return n;
+    }
+    exit(EXIT_FAILURE);
 }
 
 void write_void() {
@@ -161,7 +160,7 @@ void write_int(int64_t n) {
 }
 
 void write_bool(int64_t n) {
-    if (printf("%s\n", (n ? STR_TRUE : STR_FALSE)) == -1) {
+    if (printf("%s\n", (n ? "#t" : "#f")) == -1) {
         perror("write_bool failed");
         exit(EXIT_FAILURE);
     }
