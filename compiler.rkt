@@ -1,6 +1,7 @@
 #lang racket
 
 (require
+  dyoo-while-loop
   graph
   "types.rkt"
   "uniquify.rkt"
@@ -426,29 +427,30 @@
 
 ;; Runs the current program, optionally taking an input string to send the
 ;; program as standard input.
-(define (run #:in [in-str ""])
+(define (run #:in [in-str ""] . args)
   (match-define-values
-   (sp stdout stdin #f)
-   (subprocess #f #f 'stdout "./bin/r0prog"))
+   (sp stdout stdin stderr)
+   (apply subprocess `(#f #f #f "./bin/r0prog" ,@args)))
   (thread (λ ()
             (display in-str stdin)
             (close-output-port stdin)))
   (subprocess-wait sp)
   (define st (subprocess-status sp))
-  (cond
-    [(= 1 st)
-     (error (read-line stdout))]
-    [(not (zero? st))
-     (displayln (format "r0 program failed with exit status: ~a" st) (current-error-port))]
-    [else
-     (define a (read stdout))
-     (close-input-port stdout)
-     a]))
+  (while (not (eof-object? (peek-char stderr)))
+         (displayln (read-line stderr) (current-error-port)))
+  (unless (zero? st)
+    (displayln
+     (format  "r0 program failed with exit status: ~a" st) (current-error-port)))
+  (define a (read stdout))  
+  (close-input-port stdout)
+  (close-input-port stderr)
+  a)
+  
 
 ;; Shorthand for compiling and running an expression, optionally with input.
-(define (compile/run expr #:in [in-str ""])
+(define (compile/run expr #:in [in-str ""] . cl-args)
   (unless (not (compile expr))
-    (run #:in in-str)))
+    (apply run cl-args #:in in-str)))
   
                
 ;;;
