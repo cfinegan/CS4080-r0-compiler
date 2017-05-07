@@ -145,21 +145,21 @@ int64_t read_int() {
 }
 
 void write_void() {
-  if (printf("#<void>\n") == -1) {
+  if (printf("#<void>\n") < 0) {
     perror("write_void failed");
     exit(EXIT_FAILURE);
   }
 }
 
 void write_int(int64_t n) {
-  if (printf("%ld\n", n) == -1) {
+  if (printf("%ld\n", n) < 0) {
     perror("write_int failed");
     exit(EXIT_FAILURE);
   }
 }
 
 void write_bool(int64_t n) {
-  if (printf("%s\n", (n ? "#t" : "#f")) == -1) {
+  if (printf("%s\n", (n ? "#t" : "#f")) < 0) {
     perror("write_bool failed");
     exit(EXIT_FAILURE);
   }
