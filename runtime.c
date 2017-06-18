@@ -144,11 +144,12 @@ int64_t read_int() {
   exit(EXIT_FAILURE);
 }
 
+// no-op for now?
 void write_void() {
-  if (printf("#<void>\n") < 0) {
-    perror("write_void failed");
-    exit(EXIT_FAILURE);
-  }
+//  if (printf("#<void>\n") < 0) {
+//    perror("write_void failed");
+//    exit(EXIT_FAILURE);
+// }
 }
 
 void write_int(int64_t n) {

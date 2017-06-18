@@ -1,8 +1,9 @@
 #lang racket
 
 (require
-  dyoo-while-loop
+  chk
   graph
+  syntax/parse/define
   "types.rkt"
   "uniquify.rkt"
   "typeof.rkt"
@@ -102,7 +103,7 @@
                     spill-count
                     (add1 spill-count))))
 
-  (unless (not (verbose-output?))
+  (when (verbose-output?)
     (displayln (format "num colors: ~a" num-colors))
     (displayln (format "spill count: ~a" spill-count))
     (displayln (format "stack size: ~a" stack-size)))
@@ -418,6 +419,8 @@
 ;; Compiles the program using whatever's currently in the "./bin/" directory.
 (define (compile input-expr)
   (define asm-str (expr->asm input-expr))
+  (unless (directory-exists? "./bin")
+    (make-directory "./bin"))
   (define out-file (open-output-file "bin/r0func.s" #:exists 'replace))
   (display asm-str out-file)
   (close-output-port out-file)
@@ -427,25 +430,21 @@
 
 ;; Runs the current program, optionally taking an input string to send the
 ;; program as standard input.
-(define (run #:in [in-str ""] . args)
-  (match-define-values
-   (sp stdout stdin stderr)
-   (apply subprocess `(#f #f #f "./bin/r0prog" ,@args)))
+(define (run #:args [args empty] #:in [in-str ""])
+  (define-values (sp stdout stdin stderr)
+    (apply subprocess #f #f #f "./bin/r0prog" args))
   (thread (λ ()
             (display in-str stdin)
             (close-output-port stdin)))
   (subprocess-wait sp)
   (define st (subprocess-status sp))
-  (while (not (eof-object? (peek-char stderr)))
-         (displayln (read-line stderr) (current-error-port)))
   (unless (zero? st)
-    (displayln
-     (format  "r0 program failed with exit status: ~a" st) (current-error-port)))
-  (define a (read stdout))  
-  (close-input-port stdout)
+    (displayln (port->string stderr #:close? #f) (current-error-port))
+    (eprintf "r0 program failed with exit status: ~a\n" st))
   (close-input-port stderr)
+  (define a (read stdout))
+  (close-input-port stdout)
   a)
-  
 
 ;; Shorthand for compiling and running an expression, optionally with input.
 (define (compile/run expr #:in [in-str ""] . cl-args)
@@ -456,100 +455,104 @@
 ;;;
 ;;; TESTS
 ;;;
-
-; namespace anchor
-(define r0-ns (make-base-namespace))
-
-(define (r0-eval expr #:in [input ""])
-  (parameterize ([current-input-port (open-input-string input)])
-    (eval expr r0-ns)))
-
-(define (expected? expr #:in [in-str ""])
-  (define eval-res (r0-eval expr #:in in-str))
-  (define asm-res (compile/run expr #:in in-str))
-  (unless (equal? eval-res asm-res)
-    (displayln (format "eval res: ~a" eval-res))
-    (displayln (format "asm  res: ~a" asm-res)))
-  (equal? eval-res asm-res))
-
-(struct tc (expr in-str) #:transparent)
-
-(define test-cases
-  `(#t
-    #f
-    0
-    1
-    -1
-    (- 1)
-    ,(tc '(read) "40")
-    (+ 21 55)
-    ,(tc '(+ (read) (read)) "20 4")
-    (- 128 12)
-    (let ([x 5] [y 6]) (+ x y))
-    ,(tc '(let ([x (read)] [y (read)]) (+ x y)) "5 6")
-    (= 0 0)
-    (= 5 40)
-    (not #t)
-    (not #f)
-    (not (= 1 0))
-    (< 1 2)
-    (< 2 1)
-    (<= 1 2)
-    (<= 2 2)
-    (<= 2 1)
-    (> 1 2)
-    (> 2 1)
-    (>= 1 2)
-    (>= 1 1)
-    (>= 2 1)
-    (if #t 500 60)
-    (if #f 120 6)
-    (if (= 0 1) 50 1)
-    (if (= 20 20) (+ 1 2) 4000)
-    (if (let ([x 5] [y 4]) (> x y)) 42 90)
-    ,(tc '(if (= (read) (read)) 1 2) "20 100")
-    (if (= (let ([x 5]) (+ x 0)) 5) (+ 2 3) (- 5))
-    (if (not (= 50 1)) 2 3)
-    (if (not (= 2 1)) (if (>= 4 5) 501 502) 503)
-    ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 5")
-    ,(tc '(if (= (read) (read)) 123456 (+ 2 3)) "5 10")
-    ,(tc '(let ([a (read)] [b (read)]) (= a b)) "2 10")
-    (let ([x (+ 2 3)] [y (- 5)] [a 55])
-      (let ([x (- x y)] [z (+ x y)])
-        (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
-          (+ w (- x (+ a 2))))))
-    (let ([v 1] [w 46])
-      (let ([x (+ v 7)])
-        (let ([y (+ 4 x)] [z (+ x w)])
-          (+ z (- y)))))
-    (let ([a 5] [b (= 3 3)])
-      (if b a 3))
-    (vector-ref (vector-ref (vector (vector 42)) 0) 0)
-    ))
-
-(define (run-all-tests)
-  (for-each
-   (λ (test)
-     (displayln test)
-     (match test
-       [(tc expr in-str)
-        (unless (expected? expr #:in in-str)
-          (displayln (format "failed test: ~a with input: ~a" expr in-str) (current-error-port)))]
-       [_
-        (unless (expected? test)
-          (displayln (format "failed test: ~a" test) (current-error-port)))])
-     (newline))
-   test-cases))
-
-
-(run-all-tests)
-
-;; last test of this fails
-(parameterize ([current-register-max 0])
-  (run-all-tests))
-
-;; failing tests
-(compile/run '(vector-ref (vector 42 43) 1))
+(module+ test
+  ;; Basic namespace for r0-eval.
+  (define r0-ns (make-base-namespace))
+  ;; Used to get an "expected" result for test expressions. This relies on the
+  ;; fact that r0 syntax is a strict subset of Racket.
+  (define (r0-eval expr #:in [input ""])
+    (parameterize ([current-input-port (open-input-string input)])
+      (eval expr r0-ns)))
+  ;; Runs a test and complains if its output doesn't match the expected.
+  (define (go* args in-str exp)
+    (compile exp)
+    (define-values (sp stdout stdin stderr)
+      (apply subprocess #f #f #f "./bin/r0prog" args))
+    (thread (λ ()
+              (display in-str stdin)
+              (close-output-port stdin)))
+    (subprocess-wait sp)
+    (define st (subprocess-status sp))
+    (unless (zero? st)
+      (displayln (port->string stderr #:close? #f) (current-error-port))
+      (eprintf "r0 program failed with exit status: ~a\n" st))
+    (close-input-port stderr)
+    (with-chk (['source exp]
+               ['register-max (current-register-max)])
+      (chk*
+       (chk #:? zero? st)
+       (define a (read stdout))
+       (define a-val (if (eof-object? a) (void) a))
+       (chk #:eq equal? a-val (r0-eval exp #:in in-str))))
+    (close-input-port stdout))
+  ;; Macro so the test cases don't need to all be quoted (yawn).
+  (define-syntax (go stx)
+    (syntax-parse stx
+      [(_ (~optional (~seq #:in in-str:expr) #:defaults ([in-str #'""]))
+          (~optional (~seq #:args args:expr) #:defaults ([args #'empty]))
+          e)
+       #'(go* args in-str (quote e))]))
+  ;; Runs all the tests.
+  (define (run-all) 
+    (go #t)
+    (go #f)
+    (go 0)
+    (go 1)
+    (go -1)
+    (go (void))
+    (go (+ 2 3))
+    (go (- 1))
+    (go #:in "40" (read))
+    (go (+ 21 55))
+    (go #:in "20 4" (+ (read) (read)))
+    (go (- 128 12))
+    (go (let ([x 5] [y 6]) (+ x y)))
+    (go #:in "5 6" (let ([x (read)] [y (read)]) (+ x y)))
+    (go (= 0 0))
+    (go (= 1 1))
+    (go (= 5 40))
+    (go (not #t))
+    (go (not #f))
+    (go (not (= 1 0)))
+    (go (< 1 2))
+    (go (< 2 1))
+    (go (<= 1 2))
+    (go (<= 2 2))
+    (go (<= 2 1))
+    (go (>= 1 2))
+    (go (>= 2 2))
+    (go (>= 2 1))
+    (go (> 1 2))
+    (go (< 1 2))
+    (go (>= 1 2))
+    (go (>= 2 2))
+    (go (>= 2 1))
+    (go (if #t 500 60))
+    (go (if #f 120 6))
+    (go (if (= 0 1) 50 1))
+    (go (if (= 20 20) (+ 1 2) 4000))
+    (go (if (let ([x 5] [y 4]) (> x y)) 42 90))
+    (go #:in "20 100" (if (= (read) (read)) 1 2))
+    (go (if (= (let ([x 5]) (+ x 0)) 5) (+ 2 3) (- 5)))
+    (go (if (not (= 2 1)) (if (>= 4 5) 501 502) 503))
+    (go #:in "5 5" (if (= (read) (read)) 123456 (+ 2 3)))
+    (go #:in "5 10" (if (= (read) (read)) 123456 (+ 2 3)))
+    (go #:in "2 10" (let ([a (read)] [b (read)]) (= a b)))
+    (go (let ([x (+ 2 3)] [y (- 5)] [a 55])
+          (let ([x (- x y)] [z (+ x y)])
+            (let ([w (if (< x z) (+ 5 z) (- x (+ y 5)))])
+              (+ w (- x (+ a 2)))))))
+    (go (let ([v 1] [w 46])
+          (let ([x (+ v 7)])
+            (let ([y (+ 4 x)] [z (+ x w)])
+              (+ z (- y))))))
+    (go (let ([a 5] [b (= 3 3)]) (if b a 3)))
+    (go (vector-ref (vector-ref (vector (vector 42)) 0) 0)))
+  ;; Invoke the tests.
+  (parameterize ([verbose-output? #f])
+    (run-all)
+    (parameterize ([current-register-max 0])
+      (run-all))))
 
 ;; vector set test fails right now.
 #;
