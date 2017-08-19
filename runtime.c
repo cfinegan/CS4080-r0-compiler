@@ -7,6 +7,7 @@
 // Linux API Includes
 #include <sys/mman.h>
 #include <unistd.h>
+#include <signal.h>
 
 void gc_init(uint64_t rootstack_size, uint64_t heap_size);
 void gc_collect(int64_t **roostack_ptr, uint64_t bytes_requested);
@@ -16,6 +17,8 @@ void write_int(int64_t n);
 void write_bool(int64_t n);
 void write_vector(int64_t *vec);
 void write_any(int64_t n, int64_t ty);
+void install_handlers();
+void segfault_handler(int sig, siginfo_t* info, void* context);
 
 extern int r0func();
 
@@ -34,6 +37,8 @@ int64_t **rootstack_begin = NULL;
 long PG_SIZE;
 
 int main(int argc, char *argv[]) {
+  install_handlers();
+
   PG_SIZE = sysconf(_SC_PAGE_SIZE);
 
   uint64_t arg_heap_size = (uint64_t)PG_SIZE;
@@ -179,4 +184,53 @@ void write_any(int64_t n, int64_t ty) {
     fprintf(stderr, "write_any failed with unknown type: %ld\n", ty);
     exit(EXIT_FAILURE);
   }
+}
+
+void install_handlers() {
+    struct sigaction act;
+    sigset_t mask;
+    sigemptyset(&mask);
+    // Register SIGSEGV handler.
+    act.sa_sigaction = segfault_handler;
+    act.sa_mask = mask;
+    act.sa_flags = SA_SIGINFO;
+    if (sigaction(SIGSEGV, &act, NULL)) {
+      perror("sigaction failed for SIGSEGV");
+      exit(EXIT_FAILURE);
+    }
+}
+
+void segfault_handler(int sig, siginfo_t* info, void* context){
+  fprintf(stderr, "====== SIGSEGV ======\n");
+  if (info->si_errno) {
+    fprintf(stderr, "%s\n", strerror(info->si_errno));
+  }
+  switch (info->si_code) {
+  case SEGV_MAPERR:
+    fprintf(stderr, "SEGV_MAPERR: Address not mapped to object\n");
+    break;
+  case SEGV_ACCERR:
+    fprintf(stderr, "SEGV_ACCERR: Invalid permissions for mapped object\n");
+    break;
+  }
+  fprintf(stderr, "si_addr: 0x%lx\n", (uint64_t)info->si_addr);
+  fprintf(stderr, "free_ptr: 0x%lx\n", (uint64_t)free_ptr);
+  fprintf(stderr, "fromspace_begin: 0x%lx\n", (uint64_t)fromspace_begin);
+  fprintf(stderr, "fromspace_end: 0x%lx\n", (uint64_t)fromspace_end);
+  fprintf(stderr, "tospace_begin: 0x%lx\n", (uint64_t)tospace_begin);
+  fprintf(stderr, "tospace_end: 0x%lx\n", (uint64_t)tospace_end);
+  fprintf(stderr, "rootstack_begin: 0x%lx\n", (uint64_t)rootstack_begin);
+  void* addr = info->si_addr;
+  if (addr >= (void*)tospace_begin && addr < (void*)tospace_end) {
+    fprintf(stderr, "!! si_addr is inside of tospace !!");
+  }
+  // Reset signal to default handler and re-raise.
+  struct sigaction act;
+  sigset_t mask;
+  sigemptyset(&mask);
+  act.sa_handler = SIG_DFL;
+  act.sa_mask = mask;
+  act.sa_flags = 0;
+  sigaction(sig, &act, NULL);
+  raise(sig);
 }

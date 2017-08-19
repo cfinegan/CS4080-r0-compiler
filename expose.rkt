@@ -1,40 +1,30 @@
-#lang racket
+#lang racket/base
 
-(require "types.rkt")
-(require "typeof.rkt")
-
-(provide expose-alloc)
+(require racket/list
+         racket/match
+         "types.rkt"
+         "typeof.rkt")
 
 (define (expose-alloc expr)
-  (define next-arg-name
-    (let ([next-id -1])
-      (λ ()
-        (set! next-id (add1 next-id))
-        (string->symbol (string-append "vec" (number->string next-id))))))
-  (let expose ([expr expr])
-    (match expr
-      [(ht `(vector ,args ...) `(Vector ,tys ...))
-       (define bytes (* (add1 (length tys)) ptr-size))
-       (define arg-names (map (λ (_) (next-arg-name)) args))
-       (typeof
-        (for/fold
-         ([body
-           `(begin
-              (if
-               (< (+ (global "free_ptr") ,bytes)
-                  (global "fromspace_end"))
-               (void)
-               (collect ,bytes))
-              (let ([vec (allocate ,tys)])
-                ,(cons
-                  'begin
-                  (foldr
-                   (λ (i out)
-                     (cons `(vector-set! vec ,i ,(list-ref arg-names i)) out))
-                   (list 'vec)
-                   (range 0 (length tys))))))])
-         ([x arg-names] [e args])
-          `(let ([,x ,(expose e)]) ,body)))]
-      [(ht (? list? e) T)
-       (ht (map expose e) T)]
-      [_ expr])))
+  (match expr
+    [(ht `(vector ,args ...) `(Vector ,tys ...))
+     (define bytes (* (add1 (length tys)) ptr-size))
+     (define arg-names (for/list ([a args]) (gensym 'vec)))
+     (define body-begin
+       `(begin
+          (if (< (+ (global "free_ptr") ,bytes)
+                 (global "fromspace_end"))
+              (void)
+              (collect ,bytes))
+          (let ([vec (allocate ,tys)])
+            (begin ,@(for/list ([i (range (length tys))])
+                       `(vector-set! vec ,i ,(list-ref arg-names i)))
+                   vec))))
+     (typeof (for/fold ([body body-begin])
+                       ([x arg-names] [e args])
+               `(let ([,x ,(expose-alloc e)]) ,body)))]
+    [(ht (? list? e) T)
+     (ht (map expose-alloc e) T)]
+    [_ expr]))
+
+(provide expose-alloc)

@@ -1,9 +1,17 @@
-#lang racket
+#lang racket/base
 
 (require
-  chk
-  graph
+  (for-syntax racket/base)
+  racket/contract/base
+  racket/contract/region
+  racket/list
+  racket/match
+  racket/port
+  racket/set
+  racket/string
+  racket/system
   syntax/parse/define
+  graph
   "types.rkt"
   "uniquify.rkt"
   "typeof.rkt"
@@ -12,6 +20,9 @@
   "select-insts.rkt"
   "replace-syntax.rkt"
   "uncover-live.rkt")
+
+(define-simple-macro (for/filter (v:id lst:expr) when:expr ...+)
+  (for/list ([v lst] #:when (let () when ...)) v))
 
 ;;;
 ;;; build-interference
@@ -131,8 +142,8 @@
                     (set-intersect
                      (set-union caller-saved callee-saved)
                      (map get-var-home
-                          (filter (λ (v) (vector-ty? (hash-ref vars (var-name v))))
-                                  l-after)))
+                          (for/filter (v l-after)
+                            (vector-ty? (hash-ref vars (var-name v))))))
                     empty))
               ; live values of non-vector type
               (define lives
@@ -144,24 +155,24 @@
                (if (empty? live-vecs) empty
                    (list
                     (binary-inst 'add (int (* ptr-size (length live-vecs))) (reg 'r15))
-                    (map (λ (idx) (binary-inst 'mov
-                                               (list-ref live-vecs idx)
-                                               (deref 'r15 (- (* ptr-size (add1 idx))))))
-                         (range (length live-vecs)))))
-               (map (λ (var) (unary-inst 'push var)) lives)
+                    (for/list ([idx (range (length live-vecs))])
+                      (binary-inst 'mov
+                                   (list-ref live-vecs idx)
+                                   (deref 'r15 (- (* ptr-size (add1 idx))))))))
+               (for/list ([var lives]) (unary-inst 'push var))
                (if (odd? (length lives))
                    (list
                     (binary-inst 'sub (int ptr-size) (reg 'rsp))
                     inst
                     (binary-inst 'add (int ptr-size) (reg 'rsp)))
                    inst)
-               (foldl (λ (var lst) (cons (unary-inst 'pop var) lst)) empty lives)
+               (reverse (for/list ([var lives]) (unary-inst 'pop var)))
                (if (empty? live-vecs) empty
                    (list
-                    (map (λ (idx) (binary-inst 'mov
-                                               (deref 'r15 (- (* ptr-size (add1 idx))))
-                                               (list-ref live-vecs idx)))
-                         (reverse (range (length live-vecs))))
+                    (for/list ([idx (reverse (range (length live-vecs)))])
+                      (binary-inst 'mov
+                                   (deref 'r15 (- (* ptr-size (add1 idx))))
+                                   (list-ref live-vecs idx)))
                     (binary-inst 'sub (int (* ptr-size (length live-vecs))) (reg 'r15)))))]
              ;; other unary insts
              [(unary-inst op arg)
@@ -248,14 +259,14 @@
 ;;;
 ;;; print-asm
 ;;;
-(define current-underscore-usage
+(define current-use-underscore?
   (make-parameter (eq? (system-type 'os) 'macosx)))
 
 (define (fmt-asm op . args)
   (string-append "\t" op "\t" (string-join args ", ") "\n"))
 
 (define (fmt-label label-name)
-  (define func-prefix (if (current-underscore-usage) "_" ""))
+  (define func-prefix (if (current-use-underscore?) "_" ""))
   (string-append func-prefix label-name))
 
 (define (int->asm n)
@@ -456,6 +467,7 @@
 ;;; TESTS
 ;;;
 (module+ test
+  (require chk)
   ;; Basic namespace for r0-eval.
   (define r0-ns (make-base-namespace))
   ;; Used to get an "expected" result for test expressions. This relies on the
@@ -464,7 +476,8 @@
     (parameterize ([current-input-port (open-input-string input)])
       (eval expr r0-ns)))
   ;; Runs a test and complains if its output doesn't match the expected.
-  (define (go* args in-str exp)
+  (define/contract (go* args in-str exp)
+    ((listof string?) string? any/c . -> . void?)
     (compile exp)
     (define-values (sp stdout stdin stderr)
       (apply subprocess #f #f #f "./bin/r0prog" args))

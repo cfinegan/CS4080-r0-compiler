@@ -1,6 +1,8 @@
-#lang racket
+#lang racket/base
 
-(require "types.rkt")
+(require racket/list
+         racket/match
+         "types.rkt")
 
 ;contract-out
 (provide typeof)
@@ -9,7 +11,7 @@
   (define (fmt-type-error arg expected-type expr)
     (format "typeof: Invalid argument '~a' (expected ~a) in expr: ~a"
             arg expected-type expr))
-  (let typeof ([env #hash()] [expr expr])
+  (let typeof ([env (hash)] [expr expr])
     (define (recur e) (typeof env e))
     (match expr
       [(? integer?)
@@ -131,5 +133,4 @@
       ; if already a has-type, no work required.
       [(? ht?) expr]
       ; error
-      [else (error "invalid expression:" expr)]
-      )))
+      [else (error "invalid expression:" expr)])))

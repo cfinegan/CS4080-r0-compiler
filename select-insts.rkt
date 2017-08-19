@@ -1,7 +1,5 @@
 #lang racket
 
-(provide select-insts)
-
 (require "types.rkt")
 
 ; tag:
@@ -10,9 +8,29 @@
 ; lower 32 bits are the type tags.
 ; stores bits so that the lowest-order bit is the first type,
 ; 2nd-lowest-order bit is the 2nd type, etc.
+
+;(define (types->tag tys)
+;  (unless (not (empty? tys))
+;    (error "Empty type list is not valid for a vector"))
+;  (define tag-bits
+;    (for/fold ([tag 0])
+;              ([ty (reverse tys)])
+;      (if (and (list? ty)
+;               (eq? (first ty) 'Vector))
+;          (add1 (arithmetic-shift tag 1))
+;          (arithmetic-shift tag 1))))
+;  (bitwise-ior (arithmetic-shift (sub1 (length tys)) 59)
+;               tag-bits))
+
+;; tag:
+;; lower 32 bits are type tags.
+;; next 5 bits are size (0 - 31) => (1 - 32).
+;; upper 27 bits are don't cares (but in practice are zero)
+;; stores bits so that lowest-order bit is first type,
+;; 2nd-lowest-order bit is 2nd type, etc.
 (define (types->tag tys)
-  (unless (not (empty? tys))
-    (error "Empty type list is not valid for a vector"))
+  (when (empty? tys)
+    (error 'types->tag "Empty type list is not valid for a vector"))
   (define tag-bits
     (for/fold ([tag 0])
               ([ty (reverse tys)])
@@ -20,7 +38,7 @@
                (eq? (first ty) 'Vector))
           (add1 (arithmetic-shift tag 1))
           (arithmetic-shift tag 1))))
-  (bitwise-ior (arithmetic-shift (sub1 (length tys)) 59)
+  (bitwise-ior (arithmetic-shift (sub1 (length tys)) 32)
                tag-bits))
 
 ;; translates a naked primitive into a typed value
@@ -99,3 +117,5 @@
   (match-define (program hash-vars stmts) prog)
   (define vars (hash-keys hash-vars))
   (xprogram hash-vars (flatten (map stmt->insts stmts)) empty))
+
+(provide select-insts)

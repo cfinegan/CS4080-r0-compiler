@@ -1,15 +1,16 @@
-#lang racket
-
-(provide flatten-code)
+#lang racket/base
 
 (require
+  racket/contract/base
   racket/hash
-  kw-utils/partial
+  racket/list
+  racket/match
+  syntax/parse/define
   "types.rkt" )
 
-(define hash-combine
-  (partial
-   hash-union
+(define-simple-macro (hash-combine h0:expr hs:expr ...)
+  (hash-union
+   h0 hs ...
    #:combine/key
    (λ (k a b)
      (unless (equal? a b)
@@ -24,23 +25,23 @@
         (set! next-id (add1 next-id))
         (string->symbol (string-append "tmp." (number->string next-id))))))
              
-  (let flatten-code ([expr expr] [vartab #hash()])
+  (let flatten-code ([expr expr] [vartab (hash)])
     (match-define (ht e T) expr)
     (match e
       ; primitive
       [(? (or/c integer? boolean?))
-       (program #hash() (list (return-stmt e)))]
+       (program (hash) (list (return-stmt e)))]
       ; symbol
       [(? symbol?)
        (define name-ref (hash-ref vartab e #f))
        (if name-ref
            (flatten-code name-ref vartab)
-           (program (make-immutable-hash (list (cons e T)))
+           (program (hash e T)
                     (list (return-stmt e))))] ; TODO: should we crash if we cant find in table?
       ; read expression
       ['(read)
        (define dest-name (next-tmp-name))
-       (program (make-immutable-hash (list (cons dest-name T)))
+       (program (hash dest-name T) 
                 (list (assign-stmt 'read dest-name)
                       (return-stmt dest-name)))]
       ; void expression
@@ -61,12 +62,10 @@
        (program (program-vars se-prog)
                 (append (program-stmts se-prog) (list (last (program-stmts (last subexpr-progs))))))]
       ; let expression
-      [`(let (,(? let-var? vars) ...) ,subexpr)
+      [`(let ([,xs ,es] ...) ,subexpr)
        (define-values (next-vartab var-prog)
-         (for/fold ([vartab vartab] [var-prog (program #hash() empty)])
-                   ([var vars])
-           (define var-name (first var))
-           (define var-expr (second var))
+         (for/fold ([vartab vartab] [var-prog (program (hash) empty)])
+                   ([var-name xs] [var-expr es])
            (match-define (program vars (list stmts ... (return-stmt ans)))
              (flatten-code var-expr vartab))
            (values (hash-set vartab var-name (ht ans (ht-T var-expr)))
@@ -74,7 +73,7 @@
                             (append (program-stmts var-prog) stmts)))))
        (define subexpr-prog (flatten-code subexpr next-vartab))
        (program (hash-combine (program-vars var-prog)
-                            (program-vars subexpr-prog))
+                              (program-vars subexpr-prog))
                 (append (program-stmts var-prog) (program-stmts subexpr-prog)))]
       ; if expression
       [`(if ,cond ,then ,else)
@@ -99,8 +98,7 @@
          (flatten-code else vartab))
        (define dest-name (next-tmp-name))
        (program
-        (hash-combine (make-immutable-hash (list (cons dest-name T)))
-                    ce1-vars ce2-vars then-vars else-vars)
+        (hash-combine (hash dest-name T) ce1-vars ce2-vars then-vars else-vars)
         (append ce1-stmts
                 ce2-stmts
                 (list (if-stmt
@@ -113,7 +111,7 @@
        (match-define (program vars (list stmts ... (return-stmt ans)))
          (flatten-code subexpr vartab))
        (define dest-name (next-tmp-name))
-       (program (hash-combine vars (make-immutable-hash (list (cons dest-name T))))
+       (program (hash-combine vars (hash dest-name T))
                 (append stmts (list (assign-stmt `(,op ,ans) dest-name)
                                     (return-stmt dest-name))))]
       ; binary arithmetic / boolean operators
@@ -125,12 +123,12 @@
        (define dest-name (next-tmp-name))
        (program
         (hash-combine L-vars R-vars
-                    (make-immutable-hash
-                     (filter
-                      (λ (p) (symbol? (car p)))
-                      (list (cons L-ans (ht-T L))
-                            (cons R-ans (ht-T R))
-                            (cons dest-name T)))))
+                      (make-immutable-hash
+                       (filter
+                        (λ (p) (symbol? (car p)))
+                        (list (cons L-ans (ht-T L))
+                              (cons R-ans (ht-T R))
+                              (cons dest-name T)))))
         (append L-stmts R-stmts (list (assign-stmt `(,op ,L-ans ,R-ans) dest-name)
                                       (return-stmt dest-name))))]
       ; vector-ref
@@ -139,7 +137,7 @@
          (flatten-code vec vartab))
        (define dest-name (next-tmp-name))
        (program
-        (hash-combine vars (make-immutable-hash (list (cons dest-name T))))
+        (hash-combine vars (hash dest-name T))
         (append stmts (list (assign-stmt `(vector-ref ,ans ,i) dest-name)
                             (return-stmt dest-name))))]
       ; vector-set!
@@ -150,26 +148,27 @@
          (flatten-code arg vartab))
        (define void-return-name (next-tmp-name))
        (program
-        (hash-combine vec-vars arg-vars
-                    (make-immutable-hash (list (cons void-return-name 'Void))))
+        (hash-combine vec-vars arg-vars (hash void-return-name 'Void))
         (append vec-stmts arg-stmts
                 (list (assign-stmt `(vector-set! ,vec-ans ,i ,arg-ans) void-return-name)
-                            (return-stmt void-return-name))))]
+                      (return-stmt void-return-name))))]
       ; global value
       [`(global ,(? string?))
        (define dest-name (next-tmp-name))
-       (program (make-immutable-hash (list (cons dest-name T)))
+       (program (hash dest-name T)
                 (list (assign-stmt e dest-name)
                       (return-stmt dest-name)))]
       ; collect expression
       [`(collect ,bytes)
        (define void-return-name (next-tmp-name))
-       (program (make-immutable-hash (list (cons void-return-name 'Void)))
+       (program (hash void-return-name 'Void)
                 (list (assign-stmt e void-return-name)
                       (return-stmt void-return-name)))]
       ; allocate expression
       [`(allocate ,tys ...)
        (define dest-name (next-tmp-name))
-       (program (make-immutable-hash (list (cons dest-name T)))
+       (program (hash dest-name T)
                 (list (assign-stmt e dest-name)
                       (return-stmt dest-name)))])))
+
+(provide flatten-code)
